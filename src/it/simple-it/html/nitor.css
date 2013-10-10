@@ -1,0 +1,40 @@
+*{margin:0;padding:0;font:42px verdana,Helvetica,sans-serif;}
+
+html {
+}
+
+body{
+  background-image:url('nitor_background.png');
+  background-repeat:no-repeat;
+  background-size: cover;
+  font:42px verdana,Helvetica,sans-serif;
+  opacity: 1;
+}
+
+/* Content */
+h1{margin:40px;font-size:68px;color:#005fc6;font-weight:700;}
+h2{margin:40px;font-size:58px;color:#005fc6;font-weight:600;}
+h3{margin:40px;font-size:48px;color:#005fc6;font-weight:600;}
+
+ul{margin:20px 60px;list-style-image:url('bullet2.png');}
+ul li{margin:20px 60px;line-height:42px}
+ul li ul{margin:20px 40px;list-style-image:url('bullet3.png');}
+
+
+code{font-size:42px;font-family:courier}
+span{font-size:42px;font-family:courier}
+
+img, video, video img {height:700px;width:auto;display: block;margin-left: auto;margin-right: auto }
+
+@media print {
+  html {
+    width: 1920px;
+    height: 1080px;
+    background-image:url('nitor_background.png');
+    background-repeat:no-repeat;
+    background-size: 1920px 1080px;
+    opacity: 1;
+    margin: 0;
+    padding: 0;
+  }
+}
