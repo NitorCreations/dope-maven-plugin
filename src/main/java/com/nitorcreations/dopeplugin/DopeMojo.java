@@ -62,40 +62,43 @@ public class DopeMojo extends AbstractMojo
 			this.out = htmlDirectory;
 			this.nextSource = nextSource;
 			this.notes = notes;
+			children[0]=null;
+			children[1]=null;
 		}
 
 		public void run() {
 			try {
 				String slideName = nextSource.getName().substring(0, nextSource.getName().length() - 3);
 				File htmlFinal = new File(out, slideName + ".html");
-				if (!htmlFinal.exists() || (htmlFinal.lastModified() < nextSource.lastModified()) &&
-						(nextSource.getName().endsWith(".md"))) {
-					String nextHtml = Processor.process(nextSource);
-					File outHtml = new File(out, slideName + ".html.tmp");
-					FileWriter outWriter = new FileWriter(outHtml);
-					outWriter.write("<!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.0 Transitional//EN\" \"http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd\">\n" +
-							"<html xmlns=\"http://www.w3.org/1999/xhtml\">\n" +
-							"<head>\n" +
-							"  <meta http-equiv=\"Content-Type\" content=\"text/html; charset=utf-8\" />\n" +
-							"  <meta http-equiv=\"Content-Style-Type\" content=\"text/css\" />\n" +
-							"  <title>" + slideName + "</title>\n" +
-							"  <style type=\"text/css\">code{white-space: pre;}</style>\n" +
-							"  <link rel=\"stylesheet\" href=\"" + css + "\" type=\"text/css\" />\n" + 
-							"</head>\n" +
-							"<body>\n");
-					outWriter.write(nextHtml);
-					outWriter.write("</body>\n</html>\n");
-					outWriter.flush();
-					outWriter.close();
-					outHtml.renameTo(htmlFinal);
-				} else {
-					String nextHtml = Processor.process(nextSource);
-					notes.put(slideName + ".notes", nextHtml);
+				if (!htmlFinal.exists() || (htmlFinal.lastModified() < nextSource.lastModified())) {
+					if (nextSource.getName().endsWith(".md")) {
+						String nextHtml = Processor.process(nextSource);
+						File outHtml = new File(out, slideName + ".html.tmp");
+						FileWriter outWriter = new FileWriter(outHtml);
+						outWriter.write("<!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.0 Transitional//EN\" \"http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd\">\n" +
+								"<html xmlns=\"http://www.w3.org/1999/xhtml\">\n" +
+								"<head>\n" +
+								"  <meta http-equiv=\"Content-Type\" content=\"text/html; charset=utf-8\" />\n" +
+								"  <meta http-equiv=\"Content-Style-Type\" content=\"text/css\" />\n" +
+								"  <title>" + slideName + "</title>\n" +
+								"  <style type=\"text/css\">code{white-space: pre;}</style>\n" +
+								"  <link rel=\"stylesheet\" href=\"" + css + "\" type=\"text/css\" />\n" + 
+								"</head>\n" +
+								"<body>\n");
+						outWriter.write(nextHtml);
+						outWriter.write("</body>\n</html>\n");
+						outWriter.flush();
+						outWriter.close();
+						outHtml.renameTo(htmlFinal);
+						children[0] = new TaskThread(new RenderPngPdfTask(htmlFinal, "png"));
+						children[1] = new TaskThread(new RenderPngPdfTask(htmlFinal, "pdf"));
+						children[0].start();
+						children[1].start();
+					} else {
+						String nextHtml = Processor.process(nextSource);
+						notes.put(slideName + ".notes", nextHtml);
+					}
 				}
-				children[0] = new TaskThread(new RenderPngPdfTask(htmlFinal, "png"));
-				children[1] = new TaskThread(new RenderPngPdfTask(htmlFinal, "pdf"));
-				children[0].start();
-				children[1].start();
 			} catch (IOException e) {
 				this.error = e;
 				return;
@@ -119,20 +122,26 @@ public class DopeMojo extends AbstractMojo
 		@Override
 		public void run() {
 			String slideName = nextSource.getName().substring(0, nextSource.getName().length() - 5);
-			File nextPng = new File(slides, slideName + ".tmp." + format);
-			File finalPng = new File(slides, slideName + "." + format);
+			File outFolder;
+			if ("png".equals(format)) {
+				outFolder = slides;
+			} else {
+				outFolder = buildDirectory;
+			}
+			File nextPngPdf = new File(outFolder, slideName + ".tmp." + format);
+			File finalPngPdf = new File(outFolder, slideName + "." + format);
 			PhantomJSFileExecutor<String> ex = new PhantomJSSyncFileExecutor(PhantomJSReference.create().build());
-			String output = ex.execute(renderScript, nextSource.getAbsolutePath(), nextPng.getAbsolutePath());
+			String output = ex.execute(renderScript, nextSource.getAbsolutePath(), nextPngPdf.getAbsolutePath());
 			if (output.length() == 0) {
-				nextPng.renameTo(finalPng);
+				nextPngPdf.renameTo(finalPngPdf);
 				if ("png".equals(format)) {
 					try {
-						BufferedImage image = ImageIO.read(finalPng);
+						BufferedImage image = ImageIO.read(finalPngPdf);
 						BufferedImage smallImage =
 								Scalr.resize(image, Scalr.Method.QUALITY, Scalr.Mode.FIT_TO_WIDTH,
 										960, 0, Scalr.OP_ANTIALIAS);
-						File nextSmallPng = new File(smallSlides, finalPng.getName() + ".tmp");
-						File finalSmallPng = new File(smallSlides, finalPng.getName());
+						File nextSmallPng = new File(smallSlides, finalPngPdf.getName() + ".tmp");
+						File finalSmallPng = new File(smallSlides, finalPngPdf.getName());
 						ImageIO.write(smallImage, "png", nextSmallPng);
 						nextSmallPng.renameTo(finalSmallPng);
 					} catch (IOException e) {
@@ -219,11 +228,25 @@ public class DopeMojo extends AbstractMojo
 				if (next.task.error != null) {
 					getLog().error(next.task.error);
 				} else {
-					children.add(((RenderHtmlTask)(next.task)).children[0]);
-					children.add(((RenderHtmlTask)(next.task)).children[1]);
+					TaskThread nextThread = ((RenderHtmlTask)(next.task)).children[0];
+					if (nextThread != null) {
+						children.add(nextThread);
+						children.add(((RenderHtmlTask)(next.task)).children[1]);
+					}
 				}
 			} catch (InterruptedException e) {
-				e.printStackTrace();
+				throw new MojoExecutionException("Tasks interrupted", e);
+			}
+    	}
+    	
+    	for (TaskThread next : children) {
+    		try {
+				next.join();
+				if (next.task.error != null) {
+					getLog().error(next.task.error);
+				}
+			} catch (InterruptedException e) {
+				throw new MojoExecutionException("Tasks interrupted", e);
 			}
     	}
     	

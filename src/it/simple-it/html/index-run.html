@@ -1,0 +1,116 @@
+<html>
+<head>
+<link rel="stylesheet" media="all" href="styles.css">
+</head>
+<body>
+  <header>
+    <div class="confine">
+      <a class="nav sync">Sync to presentation</a><a class="nav showthis">Show this slide</a><a class="nav shownext">Show next slide</a><a class="nav showprev">Show previous slide</a>
+      <input class="nav" type="checkbox" name="quick" value="quick" id="quick" /><label for="quick">Use quick transitions</label>
+    </div>
+  </header>
+  <div id="content">
+    <div id="swipe-container">
+      <ul id="pages">
+<!--frames-->
+      </ul>
+    </div>
+  </div>
+  <script type="text/javascript" src="./jquery-1.9.1.min.js"></script>
+  <script type="text/javascript" src="./jquery.hammer-1.0.5.min.js"></script>
+  <script type="text/javascript" src="./jquery.dragend-0.1.3.min.js"></script>
+
+  <script>
+    'use strict';
+    var changeOnEnd = false;
+    var currentSlide = 0;
+    var onResize = function() {
+      var newWidth = $(window).width();
+      var newZoom = newWidth / 1920;
+      if (newWidth > 980 || window.matchMedia("(orientation:landscape").matches) {
+        newZoom = newZoom / 2;
+      }
+      $('iframe').css({ "top": 0, "left": 0, 
+  "zoom": newZoom,
+  "-moz-transform": "scale(" + newZoom + ")", 
+  "-moz-transform-origin": "0 0",
+  "-o-transform": "scale(" + newZoom + ")",
+  "-o-transform-origin": "0 0",
+  "-webkit-transform": "scale(" + newZoom + ")",
+  "-webkit-transform-origin": "0 0" });
+      $('iframe').height(Math.floor(100/newZoom) + "%");
+      $('iframe').width(Math.floor(100/newZoom) + "%");
+    }
+
+    $(function() {
+      var container = $("#swipe-container");
+
+      container.dragend({
+        "minTouchDistance"  : "60",
+        "keyboardNavigation": true,
+        "pageContainer"     : "ul#pages",
+        "pageElements"      : "li.page"
+      });
+
+      $("#demo").dragend({
+        direction: "vertical",
+        scribe: "40px"
+      });
+
+      $("a.next").on("click", function() {
+        container.dragend("left");
+      });
+
+      $("a.previous").on("click", function() {
+        container.dragend("right");
+      });
+
+      $("h1.logo, a.reset").on("click", function() {
+        container.dragend("reset");
+      });
+
+      $("body").on("resize", function(event) {
+        event.preventDefault();
+      }).on("touchmove", function(event){
+        event.preventDefault();
+      });
+
+      $(window).on("load", function() {
+        container.css("opacity", 1)
+      });
+      $(window).resize(onResize);
+
+      onResize();
+
+      $("#swipe-container").dragend({ onSwipeEnd: function(arg, arg2) {
+        currentSlide = $(arg2).index();
+        if (changeOnEnd) {
+          changeOnEnd = false;
+          var quick="";
+          if ($("#quick").is(':checked')) { quick = "quick"; }
+          $.get("show" + quick + "/" + currentSlide);
+        }
+      } });
+      $(".showthis").on("click", function() {
+          var quick="";
+          if ($("#quick").is(':checked')) { quick = "quick"; }
+          $.get("show" + quick + "/" + currentSlide);
+      });
+      $(".shownext").on("click", function() {
+         changeOnEnd = true;
+          $("#swipe-container").dragend("left");
+      });
+      $(".showprev").on("click", function() {
+         changeOnEnd = true;
+          $("#swipe-container").dragend("right");
+      });
+      $(".sync").on("click", function() {
+         $.get("currentslide", function(data) {
+           $("#swipe-container").dragend({ scrollToPage: Math.floor(data) });
+         });
+      });
+ });
+  </script>
+
+</body>
+</html>

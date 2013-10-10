@@ -1,0 +1,116 @@
+<html>
+<head>
+<link rel="stylesheet" media="all" href="styles.css">
+<style type="text/css">
+#swipe-container .page-content {
+  padding: 0.5rem 5rem;
+}
+#swipe-container .left {
+  float: none;
+  width: 80%;
+}
+@media only screen and (orientation: portrait) {
+  #swipe-container .page-content {
+    padding: 0.5rem 1rem;
+  }
+  #swipe-container .left {
+    float: none;
+    width: 80%;
+  }
+}
+
+@media only screen and and (max-width: 980px) {
+  #swipe-container .page-content {
+    padding: 0.5rem 1rem;
+  }
+  #swipe-container .left {
+    float: none;
+    width: 80%;
+  }
+}
+</style>
+</head>
+<body>
+  <header>
+    <div class="confine">
+      <a class="nav sync">Sync to presentation</a>
+    </div>
+  </header>
+  <div id="content">
+    <div id="swipe-container">
+      <ul id="pages">
+<!--frames-->
+      </ul>
+    </div>
+  </div>
+
+  <script type="text/javascript" src="./jquery-1.9.1.min.js"></script>
+  <script type="text/javascript" src="./jquery.hammer-1.0.5.min.js"></script>
+  <script type="text/javascript" src="./jquery.dragend-0.1.3.min.js"></script>
+
+  <script>
+    'use strict';
+    var onResize = function() {
+      var newWidth = $(window).width();
+      var newZoom = newWidth * 0.8 / 1920;
+      $('iframe').css({ "top": 0, "left": 0, 
+  "zoom": newZoom,
+  "-moz-transform": "scale(" + newZoom + ")", 
+  "-moz-transform-origin": "0 0",
+  "-o-transform": "scale(" + newZoom + ")",
+  "-o-transform-origin": "0 0",
+  "-webkit-transform": "scale(" + newZoom + ")",
+  "-webkit-transform-origin": "0 0" });
+      $('iframe').height(Math.floor(100/newZoom) + "%");
+      $('iframe').width(Math.floor(100/newZoom) + "%");
+    }
+
+    $(function() {
+      var container = $("#swipe-container");
+
+      container.dragend({
+        "minTouchDistance"  : "60",
+        "keyboardNavigation": true,
+        "pageContainer"     : "ul#pages",
+        "pageElements"      : "li.page"
+      });
+
+      $("#demo").dragend({
+        direction: "vertical",
+        scribe: "40px"
+      });
+
+      $("a.next").on("click", function() {
+        container.dragend("left");
+      });
+
+      $("a.previous").on("click", function() {
+        container.dragend("right");
+      });
+
+      $("h1.logo, a.reset").on("click", function() {
+        container.dragend("reset");
+      });
+
+      $("body").on("resize", function(event) {
+        event.preventDefault();
+      }).on("touchmove", function(event){
+        event.preventDefault();
+      });
+
+      $(window).on("load", function() {
+        container.css("opacity", 1)
+      });
+      $(window).resize(onResize);
+      onResize();
+      $(".sync").on("click", function() {
+         $.get("currentslide", function(data) {
+           $("#swipe-container").dragend({ scrollToPage: Math.floor(data) });
+         });
+      });
+
+ });
+  </script>
+
+</body>
+</html>

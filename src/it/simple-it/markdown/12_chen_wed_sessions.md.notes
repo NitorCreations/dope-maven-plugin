@@ -1,0 +1,12 @@
+* Simor Ritter again about Java 7
+    * Java 6 is EOL
+    * G1 GC?
+* More on Lambda later
+* ME for really tiny environments
+    * mbed NXP LPC1768 dev board
+        * 64KB RAM
+        * 512KB Flash
+        * Yes, _K_B
+* Just introduced JSR 352 API
+* A lego robot with a touch and a range sensor
+     * Programmed with Java
