@@ -29,6 +29,8 @@ import java.io.File;
 import java.io.FileWriter;
 import java.io.FilenameFilter;
 import java.io.IOException;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 @Mojo( name = "render", defaultPhase = LifecyclePhase.COMPILE )
 public class DopeMojo extends AbstractMojo
@@ -47,12 +49,12 @@ public class DopeMojo extends AbstractMojo
     
     public void execute() throws MojoExecutionException {
     	File f = markdownDirectory;
-    	getLog().debug(String.format("Markdown from %s\n", f.getAbsolutePath()));
+    	getLog().debug(String.format("Markdown from %s", f.getAbsolutePath()));
     	if ( !f.exists() ) {
     		return;
     	}
     	final File out = htmlDirectory;
-    	getLog().debug(String.format("HTML to %s\n", out.getAbsolutePath()));
+    	getLog().debug(String.format("HTML to %s", out.getAbsolutePath()));
     	if (!out.exists()) {
     		out.mkdirs();
     	}
@@ -62,10 +64,12 @@ public class DopeMojo extends AbstractMojo
 				return name.endsWith(".md") || name.endsWith(".md.notes");
 			}
 		});
+    	getLog().info(String.format("Processing %d markdown files", sources.length));
     	Thread[] execs = new Thread[sources.length];
+    	final Map<String, String> notes = new ConcurrentHashMap<>();
     	for (int i=0; i<sources.length;i++) {
     		final File nextSource = sources[i];
-    		System.out.printf("Starting to process %s\n", nextSource.getAbsolutePath());
+    		getLog().debug(String.format("Starting to process %s\n", nextSource.getAbsolutePath()));
         	Thread next = new Thread(new Runnable() {
 				public void run() {
 					try {
@@ -88,8 +92,9 @@ public class DopeMojo extends AbstractMojo
 							outWriter.write("</body>\n</html>\n");
 							outWriter.flush();
 							outWriter.close();
+						} else {
+							notes.put(slideName + ".notes", nextHtml);
 						}
-						System.out.println(nextHtml);
 					} catch (IOException e) {
 						e.printStackTrace();
 					}
