@@ -1,4 +1,4 @@
-package com.nitorcreations.presentationplugin;
+package com.nitorcreations.dopeplugin;
 
 /*
  * Copyright 2001-2005 The Apache Software Foundation.
@@ -31,7 +31,7 @@ import java.io.FilenameFilter;
 import java.io.IOException;
 
 @Mojo( name = "render", defaultPhase = LifecyclePhase.COMPILE )
-public class PresentationMojo extends AbstractMojo
+public class DopeMojo extends AbstractMojo
 {
 	@Parameter( defaultValue = "${project.build.directory}/classes/markdown", property = "markdownDir", required = true )
 	private File markdownDirectory;
