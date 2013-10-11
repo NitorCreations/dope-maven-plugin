@@ -1,5 +1,6 @@
 <html>
 <head>
+<title>$name</title>
 <link rel="stylesheet" media="all" href="styles.css">
 <style type="text/css">
 #swipe-container .page-content {
@@ -40,7 +41,19 @@
     <div id="swipe-container">
       <ul id="pages">
 #foreach ( $slidename in $slidenames)
-  $frames.get($slidename)
+        <li class="page">
+          <div class="page-content">
+            <div class="left">
+              <div class="content">
+                <iframe src="${slidename}.html" width="200%" height="200%" frameborder="0"></iframe>
+              </div>
+            </div>
+            <div class="right">
+              <div class="content">
+              </div>
+            </div>
+          </div>
+        </li>
 #end
       </ul>
     </div>

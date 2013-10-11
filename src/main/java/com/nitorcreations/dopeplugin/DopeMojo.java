@@ -22,6 +22,8 @@ import org.apache.maven.plugin.MojoExecutionException;
 import org.apache.maven.plugins.annotations.LifecyclePhase;
 import org.apache.maven.plugins.annotations.Mojo;
 import org.apache.maven.plugins.annotations.Parameter;
+import org.apache.pdfbox.exceptions.COSVisitorException;
+import org.apache.pdfbox.util.PDFMergerUtility;
 import org.apache.velocity.Template;
 import org.apache.velocity.VelocityContext;
 import org.apache.velocity.app.VelocityEngine;
@@ -50,8 +52,49 @@ import java.util.concurrent.ConcurrentHashMap;
 import javax.imageio.ImageIO;
 
 @Mojo( name = "render", defaultPhase = LifecyclePhase.COMPILE )
-public class DopeMojo extends AbstractMojo
-{
+public class DopeMojo extends AbstractMojo {
+	@Parameter( defaultValue = "${project.build.directory}/classes/markdown", property = "markdownDir", required = true )
+	private File markdownDirectory;
+	
+	@Parameter( defaultValue = "${project.build.directory}/classes/html", property = "htmlDir", required = true )
+    private File htmlDirectory;
+
+    @Parameter( defaultValue = "${project.build.directory}/classes/slides", property = "buildDir", required = true )
+    private File slidesDirectory;
+
+    @Parameter( defaultValue = "${project.build.directory}/classes/slides-small", property = "buildDir", required = true )
+    private File smallSlidesDirectory;
+
+    @Parameter( defaultValue = "${project.build.directory}", property = "buildDir", required = true )
+    private File buildDirectory;
+
+    @Parameter( defaultValue = "${project.groupId}.css", property = "css", required = true )
+    private String css;
+    
+    @Parameter( defaultValue = "${project.name}", property = "name", required = true )
+    private String name;
+    
+    private static File renderScript;
+    private static File videoPositionScript;
+    
+    static {
+		try {
+			renderScript = extractFile("render.js", ".js");
+			videoPositionScript = extractFile("videoposition.js", ".js");
+		} catch (IOException e) {
+    		throw new RuntimeException("Failed to create temporary resource", e);
+		}
+		
+    	try (FileOutputStream videoPositionScritpOutStream = new FileOutputStream(videoPositionScript); 
+    			InputStream videoPositionScriptStream = 
+    					DopeMojo.class.getClassLoader().getResourceAsStream("videoposition.js")) {
+    		renderScript.deleteOnExit();
+    		IOUtils.copy(videoPositionScriptStream, videoPositionScritpOutStream);
+    	} catch (IOException e) {
+    		throw new RuntimeException("Failed to create videoposition script", e);
+    	}
+    	
+    }
 	
 	public abstract class RenderTask implements Runnable {
 		public Throwable error = null;
@@ -76,9 +119,9 @@ public class DopeMojo extends AbstractMojo
 
 		public void run() {
 			try {
-				String slideName = nextSource.getName().substring(0, nextSource.getName().length() - 3);
-				File htmlFinal = new File(out, slideName + ".html");
 				if (nextSource.getName().endsWith(".md")) {
+					String slideName = nextSource.getName().substring(0, nextSource.getName().length() - 3);
+					File htmlFinal = new File(out, slideName + ".html");
 					String nextHtml = Processor.process(nextSource);
 					htmls.put(slideName, nextHtml);
 					if (htmlFinal.exists()  && (htmlFinal.lastModified() >= nextSource.lastModified())) {
@@ -108,6 +151,7 @@ public class DopeMojo extends AbstractMojo
 					children[1].start();
 					children[2].start();
 				} else {
+					String slideName = nextSource.getName().substring(0, nextSource.getName().length() - ".md.notes".length());
 					String nextHtml = Processor.process(nextSource);
 					notes.put(slideName, nextHtml);
 				}
@@ -211,52 +255,18 @@ public class DopeMojo extends AbstractMojo
 		}
 	}
 
-	public final class FrameTemplateTask extends RenderTask {
-		private final String nextSlide;
-		private final Map<String, String> htmls;
-		private final Map<String, String> notes;
-		private final Map<String, String> frames;
-		private final File template;
-		
-		private FrameTemplateTask(String nextSlide, Map<String, String> htmls, Map<String, String> notes, 
-				Map<String, String> frames) {
-			this.nextSlide = nextSlide;
-			this.htmls = htmls;
-			this.notes = notes;
-			this.frames = frames;
-			this.template = frameTemplate;
-		}
 
-		@Override
-		public void run() {
-	        VelocityEngine ve = new VelocityEngine();
-	        ve.setProperty("resource.loader", "file");
-	        ve.setProperty("file.resource.loader.class", "org.apache.velocity.runtime.resource.loader.FileResourceLoader");
-	        ve.setProperty("file.resource.loader.path", "");
-	        ve.init();
-	        Template t = ve.getTemplate(template.getAbsolutePath());
-	        VelocityContext context = new VelocityContext();
-	        context.put("htmls", htmls);
-	        context.put("notes", notes);
-	        context.put("slidename", nextSlide);
-	        StringWriter w = new StringWriter();
-	        t.merge( context, w);
-	        frames.put(nextSlide, w.toString());
-		}
-	}
 	public final class IndexTemplateTask extends RenderTask {
 		private final File nextIndex;
 		private final Map<String, String> htmls;
 		private final Map<String, String> notes;
-		private final Map<String, String> frames;
 		private final TreeSet<String> slideNames;
 		
 		private IndexTemplateTask(File nextIndex, Map<String, String> htmls, Map<String, String> notes, 
-				Map<String, String> frames, TreeSet<String> slideNames) {
+				TreeSet<String> slideNames) {
 			this.nextIndex = nextIndex;
 			this.htmls = htmls;
 			this.notes = notes;
-			this.frames = frames;
 			this.slideNames = slideNames;
 		}
 
@@ -269,9 +279,9 @@ public class DopeMojo extends AbstractMojo
 	        ve.init();
 	        Template t = ve.getTemplate(nextIndex.getAbsolutePath());
 	        VelocityContext context = new VelocityContext();
+	        context.put("name", name);
 	        context.put("htmls", htmls);
 	        context.put("notes", notes);
-	        context.put("frames", frames);
 	        context.put("slidenames", slideNames);
 	        File nextOut = new File(nextIndex.getParent(), nextIndex.getName() + ".tmp");
 			try (FileWriter w = new FileWriter(nextOut)){
@@ -283,49 +293,6 @@ public class DopeMojo extends AbstractMojo
 			}
 		}
 	}
-
-	
-	@Parameter( defaultValue = "${project.build.directory}/classes/markdown", property = "markdownDir", required = true )
-	private File markdownDirectory;
-	
-	@Parameter( defaultValue = "${project.build.directory}/classes/html", property = "htmlDir", required = true )
-    private File htmlDirectory;
-
-    @Parameter( defaultValue = "${project.build.directory}/classes/slides", property = "buildDir", required = true )
-    private File slidesDirectory;
-
-    @Parameter( defaultValue = "${project.build.directory}/classes/slides-small", property = "buildDir", required = true )
-    private File smallSlidesDirectory;
-
-    @Parameter( defaultValue = "${project.build.directory}", property = "buildDir", required = true )
-    private File buildDirectory;
-
-    @Parameter( defaultValue = "${project.groupId}.css", property = "css", required = true )
-    private String css;
-    
-    private static File frameTemplate;
-    private static File renderScript;
-    private static File videoPositionScript;
-    
-    static {
-		try {
-			renderScript = extractFile("render.js", ".js");
-			videoPositionScript = extractFile("videoposition.js", ".js");
-			frameTemplate = extractFile("frame-template.txt", ".txt");
-		} catch (IOException e) {
-    		throw new RuntimeException("Failed to create temporary resource", e);
-		}
-		
-    	try (FileOutputStream videoPositionScritpOutStream = new FileOutputStream(videoPositionScript); 
-    			InputStream videoPositionScriptStream = 
-    					DopeMojo.class.getClassLoader().getResourceAsStream("videoposition.js")) {
-    		renderScript.deleteOnExit();
-    		IOUtils.copy(videoPositionScriptStream, videoPositionScritpOutStream);
-    	} catch (IOException e) {
-    		throw new RuntimeException("Failed to create videoposition script", e);
-    	}
-    	
-    }
     
     private static File extractFile(String name, String suffix) throws IOException {
     	File target = File.createTempFile(name.substring(0, name.length() - suffix.length()), suffix);
@@ -363,9 +330,10 @@ public class DopeMojo extends AbstractMojo
     	final TreeSet<String> slideNames = new TreeSet<>();
     	for (int i=0; i<sources.length;i++) {
     		final File nextSource = sources[i];
-    		String slideName = nextSource.getName().substring(0, nextSource.getName().length() - 3);
-    		slideNames.add(slideName);
-    		getLog().debug(String.format("Starting to process %s\n", nextSource.getAbsolutePath()));
+    		if (nextSource.getName().endsWith(".md")) {
+    			slideNames.add(nextSource.getName().substring(0, nextSource.getName().length() - 3));
+    		}
+    		getLog().debug(String.format("Starting to process %s", nextSource.getAbsolutePath()));
         	TaskThread next = new TaskThread(new RenderHtmlTask(nextSource, htmls, notes));
     		execs[i] = next;
     		next.start();
@@ -388,17 +356,9 @@ public class DopeMojo extends AbstractMojo
 				throw new MojoExecutionException("Tasks interrupted", e);
 			}
     	}
-    	List<TaskThread> framesTasks = new ArrayList<>();
-    	final Map<String, String> frames = new ConcurrentHashMap<>();
-    	for (String next : slideNames) {
-    		TaskThread nextThread = new TaskThread(new FrameTemplateTask(next, htmls, notes, frames));
-    		nextThread.start();
-    		framesTasks.add(nextThread);
-    	}
-    	waitForTasks(framesTasks);
-    	TaskThread defaultIndex = new TaskThread(new IndexTemplateTask(new File(htmlDirectory, "index-default.html"), htmls, notes, frames, slideNames));
-    	TaskThread followIndex = new TaskThread(new IndexTemplateTask(new File(htmlDirectory, "index-follow.html"), htmls, notes, frames, slideNames));
-    	TaskThread runIndex = new TaskThread(new IndexTemplateTask(new File(htmlDirectory, "index-run.html"), htmls, notes, frames, slideNames));
+    	TaskThread defaultIndex = new TaskThread(new IndexTemplateTask(new File(htmlDirectory, "index-default.html"), htmls, notes, slideNames));
+    	TaskThread followIndex = new TaskThread(new IndexTemplateTask(new File(htmlDirectory, "index-follow.html"), htmls, notes, slideNames));
+    	TaskThread runIndex = new TaskThread(new IndexTemplateTask(new File(htmlDirectory, "index-run.html"), htmls, notes, slideNames));
     	defaultIndex.start();
     	followIndex.start();
     	runIndex.start();
@@ -406,6 +366,21 @@ public class DopeMojo extends AbstractMojo
     	children.add(followIndex);
     	children.add(runIndex);
     	waitForTasks(children);
+    	getLog().debug("Merging pdfs");
+        PDFMergerUtility merger = new PDFMergerUtility();
+        for( String sourceFileName : slideNames ) {
+        	File source = new File(buildDirectory, sourceFileName + ".pdf");
+        	getLog().debug("Merging pdf: " + source.getAbsolutePath());
+            merger.addSource(source.getAbsolutePath());
+        }
+        String destinationFileName = new File(htmlDirectory, "presentation.pdf").getAbsolutePath();
+        merger.setDestinationFileName(destinationFileName);
+        try {
+			merger.mergeDocuments();
+		} catch (COSVisitorException | IOException e) {
+			throw new MojoExecutionException("Failed to merge pdf", e);
+		}
+
     }
     
     private void waitForTasks(List<TaskThread> children) throws MojoExecutionException {
