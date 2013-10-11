@@ -58,6 +58,7 @@
       <artifactId>velocity</artifactId>
       <version>1.7</version>
     </dependency>
+
   </dependencies>
   <build>
     <plugins>
@@ -133,4 +134,13 @@
       </build>
     </profile>
   </profiles>
+  <dependencyManagement>
+  	<dependencies>
+  		<dependency>
+  			<groupId>org.slf4j</groupId>
+  			<artifactId>log4j-over-slf4j</artifactId>
+  			<version>1.7.5</version>
+  		</dependency>
+  	</dependencies>
+  </dependencyManagement>
 </project>

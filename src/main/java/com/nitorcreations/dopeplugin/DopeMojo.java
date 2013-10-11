@@ -22,6 +22,9 @@ import org.apache.maven.plugin.MojoExecutionException;
 import org.apache.maven.plugins.annotations.LifecyclePhase;
 import org.apache.maven.plugins.annotations.Mojo;
 import org.apache.maven.plugins.annotations.Parameter;
+import org.apache.velocity.Template;
+import org.apache.velocity.VelocityContext;
+import org.apache.velocity.app.VelocityEngine;
 import org.imgscalr.Scalr;
 
 import com.github.jarlakxen.embedphantomjs.PhantomJSReference;
@@ -36,9 +39,12 @@ import java.io.FileWriter;
 import java.io.FilenameFilter;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.StringWriter;
+import java.nio.charset.Charset;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.TreeSet;
 import java.util.concurrent.ConcurrentHashMap;
 
 import javax.imageio.ImageIO;
@@ -54,13 +60,15 @@ public class DopeMojo extends AbstractMojo
 	public final class RenderHtmlTask extends RenderTask {
 		private final File out;
 		private final File nextSource;
+		private final Map<String, String> htmls;
 		private final Map<String, String> notes;
 		
-		public final TaskThread[] children = new TaskThread[2];
+		public final TaskThread[] children = new TaskThread[3];
 		
-		private RenderHtmlTask(File nextSource, Map<String, String> notes) {
+		private RenderHtmlTask(File nextSource, Map<String, String> htmls, Map<String, String> notes) {
 			this.out = htmlDirectory;
 			this.nextSource = nextSource;
+			this.htmls = htmls;
 			this.notes = notes;
 			children[0]=null;
 			children[1]=null;
@@ -70,35 +78,40 @@ public class DopeMojo extends AbstractMojo
 			try {
 				String slideName = nextSource.getName().substring(0, nextSource.getName().length() - 3);
 				File htmlFinal = new File(out, slideName + ".html");
-				if (!htmlFinal.exists() || (htmlFinal.lastModified() < nextSource.lastModified())) {
-					if (nextSource.getName().endsWith(".md")) {
-						String nextHtml = Processor.process(nextSource);
-						File outHtml = new File(out, slideName + ".html.tmp");
-						FileWriter outWriter = new FileWriter(outHtml);
-						outWriter.write("<!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.0 Transitional//EN\" \"http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd\">\n" +
-								"<html xmlns=\"http://www.w3.org/1999/xhtml\">\n" +
-								"<head>\n" +
-								"  <meta http-equiv=\"Content-Type\" content=\"text/html; charset=utf-8\" />\n" +
-								"  <meta http-equiv=\"Content-Style-Type\" content=\"text/css\" />\n" +
-								"  <title>" + slideName + "</title>\n" +
-								"  <style type=\"text/css\">code{white-space: pre;}</style>\n" +
-								"  <link rel=\"stylesheet\" href=\"" + css + "\" type=\"text/css\" />\n" + 
-								"</head>\n" +
-								"<body>\n");
-						outWriter.write(nextHtml);
-						outWriter.write("</body>\n</html>\n");
-						outWriter.flush();
-						outWriter.close();
-						outHtml.renameTo(htmlFinal);
-						children[0] = new TaskThread(new RenderPngPdfTask(htmlFinal, "png"));
-						children[1] = new TaskThread(new RenderPngPdfTask(htmlFinal, "pdf"));
-						children[0].start();
-						children[1].start();
-					} else {
-						String nextHtml = Processor.process(nextSource);
-						notes.put(slideName + ".notes", nextHtml);
+				if (nextSource.getName().endsWith(".md")) {
+					String nextHtml = Processor.process(nextSource);
+					htmls.put(slideName, nextHtml);
+					if (htmlFinal.exists()  && (htmlFinal.lastModified() >= nextSource.lastModified())) {
+						return;
 					}
+					File outHtml = new File(out, slideName + ".html.tmp");
+					FileWriter outWriter = new FileWriter(outHtml);
+					outWriter.write("<!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.0 Transitional//EN\" \"http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd\">\n" +
+							"<html xmlns=\"http://www.w3.org/1999/xhtml\">\n" +
+							"<head>\n" +
+							"  <meta http-equiv=\"Content-Type\" content=\"text/html; charset=utf-8\" />\n" +
+							"  <meta http-equiv=\"Content-Style-Type\" content=\"text/css\" />\n" +
+							"  <title>" + slideName + "</title>\n" +
+							"  <style type=\"text/css\">code{white-space: pre;}</style>\n" +
+							"  <link rel=\"stylesheet\" href=\"" + css + "\" type=\"text/css\" />\n" + 
+							"</head>\n" +
+							"<body>\n");
+					outWriter.write(nextHtml);
+					outWriter.write("</body>\n</html>\n");
+					outWriter.flush();
+					outWriter.close();
+					outHtml.renameTo(htmlFinal);
+					children[0] = new TaskThread(new RenderPngPdfTask(htmlFinal, "png"));
+					children[1] = new TaskThread(new RenderPngPdfTask(htmlFinal, "pdf"));
+					children[2] = new TaskThread(new VideoPositionTask(htmlFinal));
+					children[0].start();
+					children[1].start();
+					children[2].start();
+				} else {
+					String nextHtml = Processor.process(nextSource);
+					notes.put(slideName, nextHtml);
 				}
+
 			} catch (IOException e) {
 				this.error = e;
 				return;
@@ -130,6 +143,9 @@ public class DopeMojo extends AbstractMojo
 			}
 			File nextPngPdf = new File(outFolder, slideName + ".tmp." + format);
 			File finalPngPdf = new File(outFolder, slideName + "." + format);
+			if (finalPngPdf.exists() && (finalPngPdf.lastModified() >= nextSource.lastModified())) {
+				return;
+			}
 			PhantomJSFileExecutor<String> ex = new PhantomJSSyncFileExecutor(PhantomJSReference.create().build());
 			String output = ex.execute(renderScript, nextSource.getAbsolutePath(), nextPngPdf.getAbsolutePath());
 			if (output.length() == 0) {
@@ -154,6 +170,119 @@ public class DopeMojo extends AbstractMojo
 			}
 		}
 	}
+	public final class VideoPositionTask extends RenderTask {
+		private final File slides;
+		private final File smallSlides;
+		private final File nextSource;
+		
+		private VideoPositionTask(File nextSource) {
+			this.slides = slidesDirectory;
+			this.smallSlides = smallSlidesDirectory;
+			this.nextSource = nextSource;
+		}
+
+		@Override
+		public void run() {
+			String slideName = nextSource.getName().substring(0, nextSource.getName().length() - 5);
+			File nextVideo = new File(slides, slideName + ".tmp.video");
+			File finalVideo = new File(slides, slideName + ".video");
+			File nextSmallVideo = new File(smallSlides, slideName + ".tmp.video");
+			File finalSmallVideo = new File(smallSlides, slideName + ".video");
+			if (finalVideo.exists() && (finalVideo.lastModified() >= nextSource.lastModified())) {
+				return;
+			}
+			PhantomJSFileExecutor<String> ex = new PhantomJSSyncFileExecutor(PhantomJSReference.create().build());
+			String output = ex.execute(videoPositionScript, nextSource.getAbsolutePath());
+			if (output.length() > 0) {
+				try (FileOutputStream out = new FileOutputStream(nextVideo);
+						FileOutputStream smallOut = new FileOutputStream(nextSmallVideo);
+				) {
+					out.write(output.getBytes(Charset.defaultCharset()));
+					out.flush();
+					smallOut.write(output.getBytes(Charset.defaultCharset()));
+					smallOut.flush();
+				} catch (IOException e) {
+					this.error = e;
+					return;
+				}
+				nextVideo.renameTo(finalVideo);
+				nextSmallVideo.renameTo(finalSmallVideo);
+			}
+		}
+	}
+
+	public final class FrameTemplateTask extends RenderTask {
+		private final String nextSlide;
+		private final Map<String, String> htmls;
+		private final Map<String, String> notes;
+		private final Map<String, String> frames;
+		private final File template;
+		
+		private FrameTemplateTask(String nextSlide, Map<String, String> htmls, Map<String, String> notes, 
+				Map<String, String> frames) {
+			this.nextSlide = nextSlide;
+			this.htmls = htmls;
+			this.notes = notes;
+			this.frames = frames;
+			this.template = frameTemplate;
+		}
+
+		@Override
+		public void run() {
+	        VelocityEngine ve = new VelocityEngine();
+	        ve.setProperty("resource.loader", "file");
+	        ve.setProperty("file.resource.loader.class", "org.apache.velocity.runtime.resource.loader.FileResourceLoader");
+	        ve.setProperty("file.resource.loader.path", "");
+	        ve.init();
+	        Template t = ve.getTemplate(template.getAbsolutePath());
+	        VelocityContext context = new VelocityContext();
+	        context.put("htmls", htmls);
+	        context.put("notes", notes);
+	        context.put("slidename", nextSlide);
+	        StringWriter w = new StringWriter();
+	        t.merge( context, w);
+	        frames.put(nextSlide, w.toString());
+		}
+	}
+	public final class IndexTemplateTask extends RenderTask {
+		private final File nextIndex;
+		private final Map<String, String> htmls;
+		private final Map<String, String> notes;
+		private final Map<String, String> frames;
+		private final TreeSet<String> slideNames;
+		
+		private IndexTemplateTask(File nextIndex, Map<String, String> htmls, Map<String, String> notes, 
+				Map<String, String> frames, TreeSet<String> slideNames) {
+			this.nextIndex = nextIndex;
+			this.htmls = htmls;
+			this.notes = notes;
+			this.frames = frames;
+			this.slideNames = slideNames;
+		}
+
+		@Override
+		public void run() {
+	        VelocityEngine ve = new VelocityEngine();
+	        ve.setProperty("resource.loader", "file");
+	        ve.setProperty("file.resource.loader.class", "org.apache.velocity.runtime.resource.loader.FileResourceLoader");
+	        ve.setProperty("file.resource.loader.path", "");
+	        ve.init();
+	        Template t = ve.getTemplate(nextIndex.getAbsolutePath());
+	        VelocityContext context = new VelocityContext();
+	        context.put("htmls", htmls);
+	        context.put("notes", notes);
+	        context.put("frames", frames);
+	        context.put("slidenames", slideNames);
+	        File nextOut = new File(nextIndex.getParent(), nextIndex.getName() + ".tmp");
+			try (FileWriter w = new FileWriter(nextOut)){
+		        t.merge( context, w);
+		        w.flush();
+		        nextOut.renameTo(nextIndex);
+			} catch (IOException e) {
+				this.error = e;
+			}
+		}
+	}
 
 	
 	@Parameter( defaultValue = "${project.build.directory}/classes/markdown", property = "markdownDir", required = true )
@@ -174,22 +303,39 @@ public class DopeMojo extends AbstractMojo
     @Parameter( defaultValue = "${project.groupId}.css", property = "css", required = true )
     private String css;
     
+    private static File frameTemplate;
     private static File renderScript;
+    private static File videoPositionScript;
+    
     static {
 		try {
-			renderScript = File.createTempFile("render", ".js");
+			renderScript = extractFile("render.js", ".js");
+			videoPositionScript = extractFile("videoposition.js", ".js");
+			frameTemplate = extractFile("frame-template.txt", ".txt");
 		} catch (IOException e) {
-    		throw new RuntimeException("Failed to create render script", e);
+    		throw new RuntimeException("Failed to create temporary resource", e);
 		}
-    	try (FileOutputStream renderScritpOutStream = new FileOutputStream(renderScript); 
-    			InputStream renderScriptStream = 
-    					DopeMojo.class.getClassLoader().getResourceAsStream("render.js")) {
+		
+    	try (FileOutputStream videoPositionScritpOutStream = new FileOutputStream(videoPositionScript); 
+    			InputStream videoPositionScriptStream = 
+    					DopeMojo.class.getClassLoader().getResourceAsStream("videoposition.js")) {
     		renderScript.deleteOnExit();
-    		IOUtils.copy(renderScriptStream, renderScritpOutStream);
+    		IOUtils.copy(videoPositionScriptStream, videoPositionScritpOutStream);
     	} catch (IOException e) {
-    		throw new RuntimeException("Failed to create render script", e);
+    		throw new RuntimeException("Failed to create videoposition script", e);
     	}
     	
+    }
+    
+    private static File extractFile(String name, String suffix) throws IOException {
+    	File target = File.createTempFile(name.substring(0, name.length() - suffix.length()), suffix);
+    	target.deleteOnExit();
+    	try (FileOutputStream outStream = new FileOutputStream(target); 
+    			InputStream inStream = 
+    					DopeMojo.class.getClassLoader().getResourceAsStream(name)) {
+    		IOUtils.copy(inStream, outStream);
+    		return target;
+    	}
     }
     
     public void execute() throws MojoExecutionException {
@@ -213,10 +359,14 @@ public class DopeMojo extends AbstractMojo
     	getLog().info(String.format("Processing %d markdown files", sources.length));
     	TaskThread[] execs = new TaskThread[sources.length];
     	final Map<String, String> notes = new ConcurrentHashMap<>();
+    	final Map<String, String> htmls = new ConcurrentHashMap<>();
+    	final TreeSet<String> slideNames = new TreeSet<>();
     	for (int i=0; i<sources.length;i++) {
     		final File nextSource = sources[i];
+    		String slideName = nextSource.getName().substring(0, nextSource.getName().length() - 3);
+    		slideNames.add(slideName);
     		getLog().debug(String.format("Starting to process %s\n", nextSource.getAbsolutePath()));
-        	TaskThread next = new TaskThread(new RenderHtmlTask(nextSource, notes));
+        	TaskThread next = new TaskThread(new RenderHtmlTask(nextSource, htmls, notes));
     		execs[i] = next;
     		next.start();
     	}
@@ -238,20 +388,39 @@ public class DopeMojo extends AbstractMojo
 				throw new MojoExecutionException("Tasks interrupted", e);
 			}
     	}
-    	
+    	List<TaskThread> framesTasks = new ArrayList<>();
+    	final Map<String, String> frames = new ConcurrentHashMap<>();
+    	for (String next : slideNames) {
+    		TaskThread nextThread = new TaskThread(new FrameTemplateTask(next, htmls, notes, frames));
+    		nextThread.start();
+    		framesTasks.add(nextThread);
+    	}
+    	waitForTasks(framesTasks);
+    	TaskThread defaultIndex = new TaskThread(new IndexTemplateTask(new File(htmlDirectory, "index-default.html"), htmls, notes, frames, slideNames));
+    	TaskThread followIndex = new TaskThread(new IndexTemplateTask(new File(htmlDirectory, "index-follow.html"), htmls, notes, frames, slideNames));
+    	TaskThread runIndex = new TaskThread(new IndexTemplateTask(new File(htmlDirectory, "index-run.html"), htmls, notes, frames, slideNames));
+    	defaultIndex.start();
+    	followIndex.start();
+    	runIndex.start();
+    	children.add(defaultIndex);
+    	children.add(followIndex);
+    	children.add(runIndex);
+    	waitForTasks(children);
+    }
+    
+    private void waitForTasks(List<TaskThread> children) throws MojoExecutionException {
     	for (TaskThread next : children) {
     		try {
-				next.join();
-				if (next.task.error != null) {
-					getLog().error(next.task.error);
-				}
-			} catch (InterruptedException e) {
-				throw new MojoExecutionException("Tasks interrupted", e);
-			}
+    			next.join();
+    			if (next.task.error != null) {
+    				getLog().error(next.task.error);
+    			}
+    		} catch (InterruptedException e) {
+    			throw new MojoExecutionException("Tasks interrupted", e);
+    		}
     	}
-    	
-    	
     }
+    
     private static void ensureDir(File dir) throws MojoExecutionException {
     	if (dir.exists() && !dir.isDirectory()) {
     		throw new MojoExecutionException(String.format("%s exists and is not a directory", dir.getAbsolutePath()));

@@ -39,7 +39,9 @@
   <div id="content">
     <div id="swipe-container">
       <ul id="pages">
-<!--frames-->
+#foreach ( $slidename in $slidenames)
+  $frames.get($slidename)
+#end
       </ul>
     </div>
   </div>
