@@ -26,6 +26,37 @@ span{font-size:42px;font-family:courier}
 
 img, video, video img {height:700px;width:auto;display: block;margin-left: auto;margin-right: auto }
 
+.java_type {
+color: rgb(0,44,221);
+}
+.java_keyword {
+color: rgb(0,0,0); font-weight: bold;
+}
+.java_javadoc_comment {
+color: rgb(147,147,147); background-color: rgb(247,247,247); font-style: italic;
+}
+.java_comment {
+color: rgb(147,147,147); background-color: rgb(247,247,247);
+}
+.java_operator {
+color: rgb(0,124,31);
+}
+.java_plain {
+color: rgb(0,0,0);
+}
+.java_literal {
+color: rgb(188,0,0);
+}
+code {
+color: rgb(0,0,0); font-family: monospace; font-size: 12px; white-space: nowrap;
+}
+.java_javadoc_tag {
+color: rgb(147,147,147); background-color: rgb(247,247,247); font-style: italic; font-weight: bold;
+}
+.java_separator {
+color: rgb(0,33,255);
+}
+
 @media print {
   html {
     width: 1920px;

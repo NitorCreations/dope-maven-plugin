@@ -28,13 +28,22 @@ import org.apache.velocity.Template;
 import org.apache.velocity.VelocityContext;
 import org.apache.velocity.app.VelocityEngine;
 import org.imgscalr.Scalr;
+import org.pegdown.Extensions;
+import org.pegdown.LinkRenderer;
+import org.pegdown.PegDownProcessor;
+import org.pegdown.ToHtmlSerializer;
+import org.pegdown.ast.RootNode;
+import org.pegdown.ast.VerbatimNode;
 
 import com.github.jarlakxen.embedphantomjs.PhantomJSReference;
 import com.github.jarlakxen.embedphantomjs.executor.PhantomJSFileExecutor;
 import com.github.jarlakxen.embedphantomjs.executor.PhantomJSSyncFileExecutor;
 import com.github.rjeschke.txtmark.Processor;
+import com.uwyn.jhighlight.renderer.XhtmlRendererFactory;
 
 import java.awt.image.BufferedImage;
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.FileWriter;
@@ -43,6 +52,8 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.StringWriter;
 import java.nio.charset.Charset;
+import java.nio.file.Files;
+import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -119,10 +130,14 @@ public class DopeMojo extends AbstractMojo {
 
 		public void run() {
 			try {
+				PegDownProcessor processor = new PegDownProcessor(Extensions.AUTOLINKS + Extensions.TABLES + Extensions.FENCED_CODE_BLOCKS);
+
 				if (nextSource.getName().endsWith(".md")) {
 					String slideName = nextSource.getName().substring(0, nextSource.getName().length() - 3);
 					File htmlFinal = new File(out, slideName + ".html");
-					String nextHtml = Processor.process(nextSource);
+					String markdown = new String(Files.readAllBytes(Paths.get(nextSource.toURI())), Charset.defaultCharset());
+					RootNode astRoot = processor.parseMarkdown(markdown.toCharArray());
+					String nextHtml = new JHightlihtToHtmlSerializer().toHtml(astRoot);
 					htmls.put(slideName, nextHtml);
 					if (htmlFinal.exists()  && (htmlFinal.lastModified() >= nextSource.lastModified())) {
 						return;
@@ -152,7 +167,9 @@ public class DopeMojo extends AbstractMojo {
 					children[2].start();
 				} else {
 					String slideName = nextSource.getName().substring(0, nextSource.getName().length() - ".md.notes".length());
-					String nextHtml = Processor.process(nextSource);
+					String markdown = new String(Files.readAllBytes(Paths.get(nextSource.toURI())), Charset.defaultCharset());
+					RootNode astRoot = processor.parseMarkdown(markdown.toCharArray());
+					String nextHtml = new JHightlihtToHtmlSerializer().toHtml(astRoot);
 					notes.put(slideName, nextHtml);
 				}
 
@@ -403,6 +420,36 @@ public class DopeMojo extends AbstractMojo {
     	if (!dir.exists() && !dir.mkdirs()) {
     		throw new MojoExecutionException(String.format("Failed to create directory %s", dir.getAbsolutePath()));
     	}
-    	
     }
+
+    private class JHightlihtToHtmlSerializer extends ToHtmlSerializer {
+
+    	public JHightlihtToHtmlSerializer() {
+    		this(new LinkRenderer());
+    	}
+    	public JHightlihtToHtmlSerializer(LinkRenderer linkRenderer) {
+    		super(linkRenderer);
+    	}
+
+    	@Override
+    	public void visit(VerbatimNode node) {
+    		if (XhtmlRendererFactory.getSupportedTypes().contains(node.getType())) {
+    			ByteArrayOutputStream out = new ByteArrayOutputStream(); 
+    			try {
+    				XhtmlRendererFactory.getRenderer(node.getType())
+    				.highlight("",
+    						new ByteArrayInputStream(node.getText().getBytes()),
+    						out,
+    						"UTF-8",
+    						true);
+    				printer.print(out.toString());
+    			} catch (IOException e) {
+    				e.printStackTrace();
+    			}
+    		} else {
+    			super.visit(node);
+    		}
+    	}
+    }
+
 }
