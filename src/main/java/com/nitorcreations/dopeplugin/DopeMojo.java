@@ -38,7 +38,6 @@ import org.pegdown.ast.VerbatimNode;
 import com.github.jarlakxen.embedphantomjs.PhantomJSReference;
 import com.github.jarlakxen.embedphantomjs.executor.PhantomJSFileExecutor;
 import com.github.jarlakxen.embedphantomjs.executor.PhantomJSSyncFileExecutor;
-import com.github.rjeschke.txtmark.Processor;
 import com.uwyn.jhighlight.renderer.XhtmlRendererFactory;
 
 import java.awt.image.BufferedImage;
