@@ -12,7 +12,15 @@
   <properties>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
   </properties>
-
+  <developers>
+  	<developer>
+  	  <name>Pasi Niemi</name>
+  	</developer>
+  </developers>
+  <organization>
+    <name>Nitor Creations</name>
+  </organization>
+  <inceptionYear>2013</inceptionYear>
   <build>
     <plugins>
       <plugin>
@@ -31,6 +39,8 @@
         <configuration>
           <markdownDirectory>markdown</markdownDirectory>
           <htmlDirectory>html</htmlDirectory>
+          <htmlTemplate>html/slidetemplate.html</htmlTemplate>
+          <titleTemplate>html/title.html</titleTemplate>
           <css>nitor.css</css>
         </configuration>
       </plugin>

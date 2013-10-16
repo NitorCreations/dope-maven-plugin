@@ -1,27 +1,13 @@
 package com.nitorcreations.dopeplugin;
 
-/*
- * Copyright 2001-2005 The Apache Software Foundation.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
-
 import org.apache.commons.io.IOUtils;
 import org.apache.maven.plugin.AbstractMojo;
 import org.apache.maven.plugin.MojoExecutionException;
 import org.apache.maven.plugins.annotations.LifecyclePhase;
 import org.apache.maven.plugins.annotations.Mojo;
 import org.apache.maven.plugins.annotations.Parameter;
+import org.apache.maven.project.MavenProject;
+import org.apache.maven.project.artifact.ProjectArtifact;
 import org.apache.pdfbox.exceptions.COSVisitorException;
 import org.apache.pdfbox.util.PDFMergerUtility;
 import org.apache.velocity.Template;
@@ -54,6 +40,7 @@ import java.nio.charset.Charset;
 import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.TreeSet;
@@ -69,7 +56,13 @@ public class DopeMojo extends AbstractMojo {
 	@Parameter( defaultValue = "${project.build.directory}/classes/html", property = "htmlDir", required = true )
     private File htmlDirectory;
 
-    @Parameter( defaultValue = "${project.build.directory}/classes/slides", property = "buildDir", required = true )
+	@Parameter( defaultValue = "${project.build.directory}/classes/html/slidetemplate.html", property = "htmlTemplate", required = true )
+    private File htmlTemplate;
+
+	@Parameter( defaultValue = "${project.build.directory}/classes/html/title.html", property = "titleTemplate", required = true )
+    private File titleTemplate;
+
+	@Parameter( defaultValue = "${project.build.directory}/classes/slides", property = "buildDir", required = true )
     private File slidesDirectory;
 
     @Parameter( defaultValue = "${project.build.directory}/classes/slides-small", property = "buildDir", required = true )
@@ -83,6 +76,9 @@ public class DopeMojo extends AbstractMojo {
     
     @Parameter( defaultValue = "${project.name}", property = "name", required = true )
     private String name;
+    
+    @Parameter( defaultValue = "${project}", required = true )
+    private MavenProject project;
     
     private static File renderScript;
     private static File videoPositionScript;
@@ -123,8 +119,6 @@ public class DopeMojo extends AbstractMojo {
 			this.nextSource = nextSource;
 			this.htmls = htmls;
 			this.notes = notes;
-			children[0]=null;
-			children[1]=null;
 		}
 
 		public void run() {
@@ -141,23 +135,8 @@ public class DopeMojo extends AbstractMojo {
 					if (htmlFinal.exists()  && (htmlFinal.lastModified() >= nextSource.lastModified())) {
 						return;
 					}
-					File outHtml = new File(out, slideName + ".html.tmp");
-					FileWriter outWriter = new FileWriter(outHtml);
-					outWriter.write("<!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.0 Transitional//EN\" \"http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd\">\n" +
-							"<html xmlns=\"http://www.w3.org/1999/xhtml\">\n" +
-							"<head>\n" +
-							"  <meta http-equiv=\"Content-Type\" content=\"text/html; charset=utf-8\" />\n" +
-							"  <meta http-equiv=\"Content-Style-Type\" content=\"text/css\" />\n" +
-							"  <title>" + slideName + "</title>\n" +
-							"  <style type=\"text/css\">code{white-space: pre;}</style>\n" +
-							"  <link rel=\"stylesheet\" href=\"" + css + "\" type=\"text/css\" />\n" + 
-							"</head>\n" +
-							"<body>\n");
-					outWriter.write(nextHtml);
-					outWriter.write("</body>\n</html>\n");
-					outWriter.flush();
-					outWriter.close();
-					outHtml.renameTo(htmlFinal);
+					MergeHtml m = new MergeHtml(nextHtml, slideName, htmlFinal);
+					m.merge();
 					children[0] = new TaskThread(new RenderPngPdfTask(htmlFinal, "png"));
 					children[1] = new TaskThread(new RenderPngPdfTask(htmlFinal, "pdf"));
 					children[2] = new TaskThread(new VideoPositionTask(htmlFinal));
@@ -176,6 +155,44 @@ public class DopeMojo extends AbstractMojo {
 				this.error = e;
 				return;
 			}
+		}
+	}
+	
+	public final class MergeHtml {
+		private final String html;
+		private final String slideName;
+		private final String css;
+		private final File out;
+		private final File template;
+		private final File htmlFinal;
+		
+		public MergeHtml(String html, String slideName, File htmlFinal) {
+			this.html = html;
+			this.slideName = slideName;
+			this.css = DopeMojo.this.css;
+			this.out = htmlDirectory;
+			this.template = htmlTemplate;
+			this.htmlFinal = htmlFinal;
+		}
+		
+		public void merge() throws IOException {
+	        VelocityEngine ve = new VelocityEngine();
+	        ve.setProperty("resource.loader", "file");
+	        ve.setProperty("file.resource.loader.class", "org.apache.velocity.runtime.resource.loader.FileResourceLoader");
+	        ve.setProperty("file.resource.loader.path", "");
+	        ve.init();
+	        Template t = ve.getTemplate(template.getAbsolutePath());
+	        VelocityContext context = new VelocityContext();
+	        context.put("name", name);
+	        context.put("slideName", slideName);
+	        context.put("css", css);
+	        context.put("html", html);
+	        context.put("project", project);
+	        File nextOut = new File(out, slideName + ".html.tmp");
+			FileWriter w = new FileWriter(nextOut);
+			t.merge( context, w);
+			w.flush();
+			nextOut.renameTo(htmlFinal);
 		}
 	}
 	
@@ -272,18 +289,20 @@ public class DopeMojo extends AbstractMojo {
 	}
 
 
-	public final class IndexTemplateTask extends RenderTask {
+	public class IndexTemplateTask extends RenderTask {
 		private final File nextIndex;
 		private final Map<String, String> htmls;
 		private final Map<String, String> notes;
-		private final TreeSet<String> slideNames;
+		private final List<String> slideNames;
+		private final MavenProject project;
 		
 		private IndexTemplateTask(File nextIndex, Map<String, String> htmls, Map<String, String> notes, 
-				TreeSet<String> slideNames) {
+				List<String> slideNames) {
 			this.nextIndex = nextIndex;
 			this.htmls = htmls;
 			this.notes = notes;
 			this.slideNames = slideNames;
+			this.project = DopeMojo.this.project;
 		}
 
 		@Override
@@ -299,6 +318,7 @@ public class DopeMojo extends AbstractMojo {
 	        context.put("htmls", htmls);
 	        context.put("notes", notes);
 	        context.put("slidenames", slideNames);
+	        context.put("project", project);
 	        File nextOut = new File(nextIndex.getParent(), nextIndex.getName() + ".tmp");
 			try (FileWriter w = new FileWriter(nextOut)){
 		        t.merge( context, w);
@@ -309,7 +329,23 @@ public class DopeMojo extends AbstractMojo {
 			}
 		}
 	}
-    
+	public final class TitleTemplateTask extends IndexTemplateTask {
+		private final TaskThread[] children = new TaskThread[3];
+		public TitleTemplateTask() {
+			super(titleTemplate, null, null, null);
+		}
+		@Override
+		public void run() {
+			super.run();
+			children [0] = new TaskThread(new RenderPngPdfTask(titleTemplate, "png"));
+			children[1] = new TaskThread(new RenderPngPdfTask(titleTemplate, "pdf"));
+			children[2] = new TaskThread(new VideoPositionTask(titleTemplate));
+			children[0].start();
+			children[1].start();
+			children[2].start();
+		}
+	}
+	
     private static File extractFile(String name, String suffix) throws IOException {
     	File target = File.createTempFile(name.substring(0, name.length() - suffix.length()), suffix);
     	target.deleteOnExit();
@@ -334,16 +370,15 @@ public class DopeMojo extends AbstractMojo {
     	getLog().debug(String.format("Small slides to %s", smallSlidesDirectory.getAbsolutePath()));
     	ensureDir(smallSlidesDirectory);
     	final File[] sources = f.listFiles(new FilenameFilter() {
-			
 			public boolean accept(File dir, String name) {
 				return name.endsWith(".md") || name.endsWith(".md.notes");
 			}
 		});
     	getLog().info(String.format("Processing %d markdown files", sources.length));
-    	TaskThread[] execs = new TaskThread[sources.length];
+    	TaskThread[] execs = new TaskThread[sources.length + 1];
     	final Map<String, String> notes = new ConcurrentHashMap<>();
     	final Map<String, String> htmls = new ConcurrentHashMap<>();
-    	final TreeSet<String> slideNames = new TreeSet<>();
+    	final ArrayList<String> slideNames = new ArrayList<>();
     	for (int i=0; i<sources.length;i++) {
     		final File nextSource = sources[i];
     		if (nextSource.getName().endsWith(".md")) {
@@ -354,24 +389,41 @@ public class DopeMojo extends AbstractMojo {
     		execs[i] = next;
     		next.start();
     	}
+		TaskThread title = new TaskThread(new TitleTemplateTask());
+		title.start();
+		execs[sources.length] = title;
+     	List<TaskThread> children = new ArrayList<>();
     	
-    	List<TaskThread> children = new ArrayList<>();
     	for (TaskThread next : execs) {
     		try {
 				next.join();
 				if (next.task.error != null) {
 					getLog().error(next.task.error);
-				} else {
+				} else if (next.task instanceof RenderHtmlTask) {
 					TaskThread nextThread = ((RenderHtmlTask)(next.task)).children[0];
 					if (nextThread != null) {
 						children.add(nextThread);
 						children.add(((RenderHtmlTask)(next.task)).children[1]);
+						children.add(((RenderHtmlTask)(next.task)).children[2]);
+					}
+				} else {
+					TaskThread nextThread = ((TitleTemplateTask)(next.task)).children[0];
+					if (nextThread != null) {
+						children.add(nextThread);
+						children.add(((TitleTemplateTask)(next.task)).children[1]);
+						children.add(((TitleTemplateTask)(next.task)).children[2]);
 					}
 				}
 			} catch (InterruptedException e) {
 				throw new MojoExecutionException("Tasks interrupted", e);
 			}
     	}
+    	Collections.sort(slideNames);
+    	String titleName = titleTemplate.getName();
+    	if (titleName.endsWith(".html")) {
+    		titleName = titleName.substring(0, titleName.length() - 5);
+    	}
+    	slideNames.add(0, titleName);
     	TaskThread defaultIndex = new TaskThread(new IndexTemplateTask(new File(htmlDirectory, "index-default.html"), htmls, notes, slideNames));
     	TaskThread followIndex = new TaskThread(new IndexTemplateTask(new File(htmlDirectory, "index-follow.html"), htmls, notes, slideNames));
     	TaskThread runIndex = new TaskThread(new IndexTemplateTask(new File(htmlDirectory, "index-run.html"), htmls, notes, slideNames));
