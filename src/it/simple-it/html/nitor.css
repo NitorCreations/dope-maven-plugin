@@ -9,6 +9,7 @@ body{
   background-size: cover;
   font:42px verdana,Helvetica,sans-serif;
   opacity: 1;
+  padding: 0.7em 0em 0em 0em !important;
 }
 
 /* Content */

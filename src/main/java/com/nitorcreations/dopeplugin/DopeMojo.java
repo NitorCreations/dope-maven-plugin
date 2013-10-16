@@ -1,14 +1,15 @@
 package com.nitorcreations.dopeplugin;
 
 import java.awt.image.BufferedImage;
-import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
+import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.FileWriter;
 import java.io.FilenameFilter;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.io.StringWriter;
 import java.nio.charset.Charset;
 import java.nio.file.Files;
 import java.nio.file.Paths;
@@ -17,6 +18,8 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import javax.imageio.ImageIO;
 
@@ -78,6 +81,9 @@ public class DopeMojo extends AbstractMojo {
 	@Parameter( defaultValue = "${project}", required = true )
 	private MavenProject project;
 
+	@Parameter( defaultValue = "", property = "pngoptimizer" )
+	private String pngoptimizer;
+	
 	private static File renderScript;
 	private static File videoPositionScript;
 
@@ -227,6 +233,8 @@ public class DopeMojo extends AbstractMojo {
 				nextPngPdf.renameTo(finalPngPdf);
 				if ("png".equals(format)) {
 					try {
+						TaskThread optimizeBig = new TaskThread(new OptimizePngTask(finalPngPdf));
+						optimizeBig.start();
 						BufferedImage image = ImageIO.read(finalPngPdf);
 						BufferedImage smallImage =
 								Scalr.resize(image, Scalr.Method.QUALITY, Scalr.Mode.FIT_TO_WIDTH,
@@ -235,7 +243,16 @@ public class DopeMojo extends AbstractMojo {
 						File finalSmallPng = new File(smallSlides, finalPngPdf.getName());
 						ImageIO.write(smallImage, "png", nextSmallPng);
 						nextSmallPng.renameTo(finalSmallPng);
-					} catch (IOException e) {
+						TaskThread optimizeSmall = new TaskThread(new OptimizePngTask(finalSmallPng));
+						optimizeSmall.start();
+						optimizeBig.join();
+						optimizeSmall.join();
+						if (optimizeBig.task.error != null) {
+							this.error = optimizeBig.task.error;
+						} else if (optimizeSmall.task.error != null) {
+							this.error = optimizeSmall.task.error;
+						}
+					} catch (IOException | InterruptedException e) {
 						this.error = e;
 					}
 				}
@@ -286,7 +303,62 @@ public class DopeMojo extends AbstractMojo {
 		}
 	}
 
+	public final class OptimizePngTask extends RenderTask {
+		
+		private final File png;
 
+		public OptimizePngTask(File png) {
+			this.png = png;
+		}
+		
+		@Override
+		public void run() {
+			if (pngoptimizer == null || pngoptimizer.length() == 0) {
+				return;
+			}
+			VelocityEngine ve = new VelocityEngine();
+			ve.init();
+			VelocityContext context = new VelocityContext();
+			context.put("png", png.getAbsolutePath());
+			StringWriter out = new StringWriter();
+			if (!ve.evaluate(context, out, "png", pngoptimizer)) {
+				this.error = new RuntimeException("Failed to merge optimizer template");
+				return;
+			}
+			try {
+				List<String> list = new ArrayList<String>();
+				Matcher m = Pattern.compile("([^\"]\\S*|\".+?\")\\s*").matcher(out.toString().trim());
+				while (m.find()) {
+				    list.add(m.group(1).replace("\"", ""));
+				}
+				Process optimize = new ProcessBuilder(list).redirectErrorStream(true).start();
+				final InputStream is = optimize.getInputStream();
+				Thread pump = new Thread() {
+					public void start() {
+						InputStreamReader isr = new InputStreamReader(is);
+						BufferedReader br = new BufferedReader(isr);
+						String line;
+						try {
+							while ((line = br.readLine()) != null) {
+								getLog().debug(line);
+							}
+						} catch (IOException e) {
+						}
+					}
+				};
+				pump.start();
+				if (optimize.waitFor() != 0) {
+					this.error = new RuntimeException("Failed to run optimizer - check debug output for why");
+					return;
+				}
+				pump.interrupt();
+			} catch (IOException | InterruptedException | IllegalThreadStateException e) {
+				this.error = e;
+			}
+			
+		}
+		
+	}
 	public class IndexTemplateTask extends RenderTask {
 		private final File nextIndex;
 		private final Map<String, String> htmls;

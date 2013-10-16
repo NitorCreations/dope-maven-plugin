@@ -42,6 +42,7 @@
           <htmlTemplate>html/slidetemplate.html</htmlTemplate>
           <titleTemplate>html/title.html</titleTemplate>
           <css>nitor.css</css>
+          <pngoptimizer>optipng "$png"</pngoptimizer>
         </configuration>
       </plugin>
     </plugins>
