@@ -389,6 +389,7 @@ public class DopeMojo extends AbstractMojo {
 			context.put("notes", notes);
 			context.put("slidenames", slideNames);
 			context.put("project", project);
+			context.put("css", css);
 			File nextOut = new File(nextIndex.getParent(), nextIndex.getName() + ".tmp");
 			try (FileWriter w = new FileWriter(nextOut)){
 				t.merge( context, w);
