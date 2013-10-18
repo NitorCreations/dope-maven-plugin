@@ -18,6 +18,9 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ThreadFactory;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -57,10 +60,7 @@ public class DopeMojo extends AbstractMojo {
 	@Parameter( defaultValue = "${project.build.directory}/classes/html", property = "htmlDir", required = true )
 	private File htmlDirectory;
 
-	@Parameter( defaultValue = "${project.build.directory}/classes/html/slidetemplate.html", property = "htmlTemplate", required = true )
 	private File htmlTemplate;
-
-	@Parameter( defaultValue = "${project.build.directory}/classes/html/title.html", property = "titleTemplate", required = true )
 	private File titleTemplate;
 
 	@Parameter( defaultValue = "${project.build.directory}/classes/slides", property = "buildDir", required = true )
@@ -320,6 +320,8 @@ public class DopeMojo extends AbstractMojo {
 			ve.init();
 			VelocityContext context = new VelocityContext();
 			context.put("png", png.getAbsolutePath());
+			context.put("project", project);
+			
 			StringWriter out = new StringWriter();
 			if (!ve.evaluate(context, out, "png", pngoptimizer)) {
 				this.error = new RuntimeException("Failed to merge optimizer template");
@@ -408,7 +410,7 @@ public class DopeMojo extends AbstractMojo {
 		@Override
 		public void run() {
 			super.run();
-			children [0] = new TaskThread(new RenderPngPdfTask(titleTemplate, "png"));
+			children[0] = new TaskThread(new RenderPngPdfTask(titleTemplate, "png"));
 			children[1] = new TaskThread(new RenderPngPdfTask(titleTemplate, "pdf"));
 			children[2] = new TaskThread(new VideoPositionTask(titleTemplate));
 			children[0].start();
@@ -430,6 +432,9 @@ public class DopeMojo extends AbstractMojo {
 
 	public void execute() throws MojoExecutionException {
 		File f = markdownDirectory;
+		htmlTemplate = new File(htmlDirectory, "slidetemplate.html");
+		titleTemplate = new File(htmlDirectory, "title.html");
+		
 		getLog().debug(String.format("Markdown from %s", f.getAbsolutePath()));
 		if ( !f.exists() ) {
 			return;
@@ -446,7 +451,7 @@ public class DopeMojo extends AbstractMojo {
 			}
 		});
 		getLog().info(String.format("Processing %d markdown files", sources.length));
-		TaskThread[] execs = new TaskThread[sources.length + 1];
+		ArrayList<TaskThread> execs = new ArrayList<>();
 		final Map<String, String> notes = new ConcurrentHashMap<>();
 		final Map<String, String> htmls = new ConcurrentHashMap<>();
 		final ArrayList<String> slideNames = new ArrayList<>();
@@ -457,12 +462,15 @@ public class DopeMojo extends AbstractMojo {
 			}
 			getLog().debug(String.format("Starting to process %s", nextSource.getAbsolutePath()));
 			TaskThread next = new TaskThread(new RenderHtmlTask(nextSource, htmls, notes));
-			execs[i] = next;
+			execs.add(next);
 			next.start();
 		}
-		TaskThread title = new TaskThread(new TitleTemplateTask());
-		title.start();
-		execs[sources.length] = title;
+		if (titleTemplate != null && titleTemplate.exists()) { 
+			TaskThread titleThread = new TaskThread((new TitleTemplateTask()));
+			titleThread.start();
+			execs.add(titleThread);
+		}
+		
 		List<TaskThread> children = new ArrayList<>();
 
 		for (TaskThread next : execs) {
@@ -490,11 +498,9 @@ public class DopeMojo extends AbstractMojo {
 			}
 		}
 		Collections.sort(slideNames);
-		String titleName = titleTemplate.getName();
-		if (titleName.endsWith(".html")) {
-			titleName = titleName.substring(0, titleName.length() - 5);
+		if (titleTemplate.exists()) {
+			slideNames.add(0, "title");
 		}
-		slideNames.add(0, titleName);
 		TaskThread defaultIndex = new TaskThread(new IndexTemplateTask(new File(htmlDirectory, "index-default.html"), htmls, notes, slideNames));
 		TaskThread followIndex = new TaskThread(new IndexTemplateTask(new File(htmlDirectory, "index-follow.html"), htmls, notes, slideNames));
 		TaskThread runIndex = new TaskThread(new IndexTemplateTask(new File(htmlDirectory, "index-run.html"), htmls, notes, slideNames));
