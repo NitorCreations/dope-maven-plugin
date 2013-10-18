@@ -17,10 +17,13 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.Callable;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.Future;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -87,6 +90,8 @@ public class DopeMojo extends AbstractMojo {
 	private static File renderScript;
 	private static File videoPositionScript;
 
+	ExecutorService service = Executors.newCachedThreadPool();
+	
 	static {
 		try {
 			renderScript = extractFile("render.js", ".js");
@@ -106,26 +111,24 @@ public class DopeMojo extends AbstractMojo {
 
 	}
 
-	public abstract class RenderTask implements Runnable {
-		public Throwable error = null;
-	}
 
-	public final class RenderHtmlTask extends RenderTask {
+	public final class RenderHtmlTask implements Callable<Throwable> {
 		private final File out;
 		private final File nextSource;
 		private final Map<String, String> htmls;
 		private final Map<String, String> notes;
+		
+		public final List<Future<Throwable>> children;
 
-		public final TaskThread[] children = new TaskThread[3];
-
-		private RenderHtmlTask(File nextSource, Map<String, String> htmls, Map<String, String> notes) {
+		private RenderHtmlTask(File nextSource, Map<String, String> htmls, Map<String, String> notes, List<Future<Throwable>> children) {
 			this.out = htmlDirectory;
 			this.nextSource = nextSource;
 			this.htmls = htmls;
 			this.notes = notes;
+			this.children = children;
 		}
 
-		public void run() {
+		public Throwable call() {
 			try {
 				PegDownProcessor processor = new PegDownProcessor(Extensions.AUTOLINKS + Extensions.TABLES + Extensions.FENCED_CODE_BLOCKS);
 
@@ -137,16 +140,13 @@ public class DopeMojo extends AbstractMojo {
 					String nextHtml = new JHightlihtToHtmlSerializer().toHtml(astRoot);
 					htmls.put(slideName, nextHtml);
 					if (htmlFinal.exists()  && (htmlFinal.lastModified() >= nextSource.lastModified())) {
-						return;
+						return null;
 					}
 					MergeHtml m = new MergeHtml(nextHtml, slideName, htmlFinal);
 					m.merge();
-					children[0] = new TaskThread(new RenderPngPdfTask(htmlFinal, "png"));
-					children[1] = new TaskThread(new RenderPngPdfTask(htmlFinal, "pdf"));
-					children[2] = new TaskThread(new VideoPositionTask(htmlFinal));
-					children[0].start();
-					children[1].start();
-					children[2].start();
+					children.add(service.submit(new RenderPngPdfTask(htmlFinal, "png")));
+					children.add(service.submit(new RenderPngPdfTask(htmlFinal, "pdf")));
+					children.add(service.submit(new VideoPositionTask(htmlFinal)));
 				} else {
 					String slideName = nextSource.getName().substring(0, nextSource.getName().length() - ".md.notes".length());
 					String markdown = new String(Files.readAllBytes(Paths.get(nextSource.toURI())), Charset.defaultCharset());
@@ -156,9 +156,9 @@ public class DopeMojo extends AbstractMojo {
 				}
 
 			} catch (IOException e) {
-				this.error = e;
-				return;
+				return e;
 			}
+			return null;
 		}
 	}
 
@@ -200,7 +200,7 @@ public class DopeMojo extends AbstractMojo {
 		}
 	}
 
-	public final class RenderPngPdfTask extends RenderTask {
+	public final class RenderPngPdfTask implements Callable<Throwable> {
 		private final File slides;
 		private final File smallSlides;
 		private final File nextSource;
@@ -214,7 +214,7 @@ public class DopeMojo extends AbstractMojo {
 		}
 
 		@Override
-		public void run() {
+		public Throwable call() {
 			String slideName = nextSource.getName().substring(0, nextSource.getName().length() - 5);
 			File outFolder;
 			if ("png".equals(format)) {
@@ -225,7 +225,7 @@ public class DopeMojo extends AbstractMojo {
 			File nextPngPdf = new File(outFolder, slideName + ".tmp." + format);
 			File finalPngPdf = new File(outFolder, slideName + "." + format);
 			if (finalPngPdf.exists() && (finalPngPdf.lastModified() >= nextSource.lastModified())) {
-				return;
+				return null;
 			}
 			PhantomJSFileExecutor<String> ex = new PhantomJSSyncFileExecutor(PhantomJSReference.create().build());
 			String output = ex.execute(renderScript, nextSource.getAbsolutePath(), nextPngPdf.getAbsolutePath());
@@ -233,8 +233,7 @@ public class DopeMojo extends AbstractMojo {
 				nextPngPdf.renameTo(finalPngPdf);
 				if ("png".equals(format)) {
 					try {
-						TaskThread optimizeBig = new TaskThread(new OptimizePngTask(finalPngPdf));
-						optimizeBig.start();
+						Future<Throwable> ob = service.submit(new OptimizePngTask(finalPngPdf));
 						BufferedImage image = ImageIO.read(finalPngPdf);
 						BufferedImage smallImage =
 								Scalr.resize(image, Scalr.Method.QUALITY, Scalr.Mode.FIT_TO_WIDTH,
@@ -243,26 +242,25 @@ public class DopeMojo extends AbstractMojo {
 						File finalSmallPng = new File(smallSlides, finalPngPdf.getName());
 						ImageIO.write(smallImage, "png", nextSmallPng);
 						nextSmallPng.renameTo(finalSmallPng);
-						TaskThread optimizeSmall = new TaskThread(new OptimizePngTask(finalSmallPng));
-						optimizeSmall.start();
-						optimizeBig.join();
-						optimizeSmall.join();
-						if (optimizeBig.task.error != null) {
-							this.error = optimizeBig.task.error;
-						} else if (optimizeSmall.task.error != null) {
-							this.error = optimizeSmall.task.error;
+						Future<Throwable> os = service.submit(new OptimizePngTask(finalSmallPng));
+						Throwable bt = ob.get();
+						Throwable st = os.get();
+						if (bt != null) {
+							return bt;
+						} else {
+							return st;
 						}
-					} catch (IOException | InterruptedException e) {
-						this.error = e;
+					} catch (IOException | InterruptedException | ExecutionException e) {
+						return e;
 					}
 				}
 			} else {
-				this.error = new Throwable(String.format("Failed to render %s '%s'.%s: %s", format, slideName, format, output));
-				return;
+				return new Throwable(String.format("Failed to render %s '%s'.%s: %s", format, slideName, format, output));
 			}
+			return null;
 		}
 	}
-	public final class VideoPositionTask extends RenderTask {
+	public final class VideoPositionTask implements Callable<Throwable> {
 		private final File slides;
 		private final File smallSlides;
 		private final File nextSource;
@@ -274,14 +272,14 @@ public class DopeMojo extends AbstractMojo {
 		}
 
 		@Override
-		public void run() {
+		public Throwable call() {
 			String slideName = nextSource.getName().substring(0, nextSource.getName().length() - 5);
 			File nextVideo = new File(slides, slideName + ".tmp.video");
 			File finalVideo = new File(slides, slideName + ".video");
 			File nextSmallVideo = new File(smallSlides, slideName + ".tmp.video");
 			File finalSmallVideo = new File(smallSlides, slideName + ".video");
 			if (finalVideo.exists() && (finalVideo.lastModified() >= nextSource.lastModified())) {
-				return;
+				return null;
 			}
 			PhantomJSFileExecutor<String> ex = new PhantomJSSyncFileExecutor(PhantomJSReference.create().build());
 			String output = ex.execute(videoPositionScript, nextSource.getAbsolutePath());
@@ -294,16 +292,16 @@ public class DopeMojo extends AbstractMojo {
 					smallOut.write(output.getBytes(Charset.defaultCharset()));
 					smallOut.flush();
 				} catch (IOException e) {
-					this.error = e;
-					return;
+					return e;
 				}
 				nextVideo.renameTo(finalVideo);
 				nextSmallVideo.renameTo(finalSmallVideo);
 			}
+			return null;
 		}
 	}
 
-	public final class OptimizePngTask extends RenderTask {
+	public final class OptimizePngTask implements Callable<Throwable> {
 		
 		private final File png;
 
@@ -312,9 +310,9 @@ public class DopeMojo extends AbstractMojo {
 		}
 		
 		@Override
-		public void run() {
+		public Throwable call() {
 			if (pngoptimizer == null || pngoptimizer.length() == 0) {
-				return;
+				return null;
 			}
 			VelocityEngine ve = new VelocityEngine();
 			ve.init();
@@ -324,8 +322,7 @@ public class DopeMojo extends AbstractMojo {
 			
 			StringWriter out = new StringWriter();
 			if (!ve.evaluate(context, out, "png", pngoptimizer)) {
-				this.error = new RuntimeException("Failed to merge optimizer template");
-				return;
+				return new RuntimeException("Failed to merge optimizer template");
 			}
 			try {
 				List<String> list = new ArrayList<String>();
@@ -350,18 +347,17 @@ public class DopeMojo extends AbstractMojo {
 				};
 				pump.start();
 				if (optimize.waitFor() != 0) {
-					this.error = new RuntimeException("Failed to run optimizer - check debug output for why");
-					return;
+					return new RuntimeException("Failed to run optimizer - check debug output for why");
 				}
 				pump.interrupt();
 			} catch (IOException | InterruptedException | IllegalThreadStateException e) {
-				this.error = e;
+				return e;
 			}
-			
+			return null;
 		}
 		
 	}
-	public class IndexTemplateTask extends RenderTask {
+	public class IndexTemplateTask implements Callable<Throwable> {
 		private final File nextIndex;
 		private final Map<String, String> htmls;
 		private final Map<String, String> notes;
@@ -378,7 +374,7 @@ public class DopeMojo extends AbstractMojo {
 		}
 
 		@Override
-		public void run() {
+		public Throwable call() {
 			VelocityEngine ve = new VelocityEngine();
 			ve.setProperty("resource.loader", "file");
 			ve.setProperty("file.resource.loader.class", "org.apache.velocity.runtime.resource.loader.FileResourceLoader");
@@ -398,24 +394,29 @@ public class DopeMojo extends AbstractMojo {
 				w.flush();
 				nextOut.renameTo(nextIndex);
 			} catch (IOException e) {
-				this.error = e;
+				return e;
 			}
+			return null;
 		}
 	}
+	
 	public final class TitleTemplateTask extends IndexTemplateTask {
-		private final TaskThread[] children = new TaskThread[3];
-		public TitleTemplateTask() {
+		private final List<Future<Throwable>> children;
+		public TitleTemplateTask(List<Future<Throwable>> children) {
 			super(titleTemplate, null, null, null);
+			this.children = children;
 		}
 		@Override
-		public void run() {
-			super.run();
-			children[0] = new TaskThread(new RenderPngPdfTask(titleTemplate, "png"));
-			children[1] = new TaskThread(new RenderPngPdfTask(titleTemplate, "pdf"));
-			children[2] = new TaskThread(new VideoPositionTask(titleTemplate));
-			children[0].start();
-			children[1].start();
-			children[2].start();
+		public Throwable call() {
+			Throwable superRes = super.call();
+			if (superRes == null) {
+				children.add(service.submit(new RenderPngPdfTask(titleTemplate, "png")));
+				children.add(service.submit(new RenderPngPdfTask(titleTemplate, "pdf")));
+				children.add(service.submit(new VideoPositionTask(titleTemplate)));
+				return null;
+			} else {
+				return superRes;
+			}
 		}
 	}
 
@@ -451,9 +452,10 @@ public class DopeMojo extends AbstractMojo {
 			}
 		});
 		getLog().info(String.format("Processing %d markdown files", sources.length));
-		ArrayList<TaskThread> execs = new ArrayList<>();
 		final Map<String, String> notes = new ConcurrentHashMap<>();
 		final Map<String, String> htmls = new ConcurrentHashMap<>();
+		final List<Future<Throwable>> execs = new ArrayList<>();
+		final List<Future<Throwable>> children = new CopyOnWriteArrayList<>();
 		final ArrayList<String> slideNames = new ArrayList<>();
 		for (int i=0; i<sources.length;i++) {
 			final File nextSource = sources[i];
@@ -461,56 +463,44 @@ public class DopeMojo extends AbstractMojo {
 				slideNames.add(nextSource.getName().substring(0, nextSource.getName().length() - 3));
 			}
 			getLog().debug(String.format("Starting to process %s", nextSource.getAbsolutePath()));
-			TaskThread next = new TaskThread(new RenderHtmlTask(nextSource, htmls, notes));
-			execs.add(next);
-			next.start();
+			execs.add(service.submit(new RenderHtmlTask(nextSource, htmls, notes, children)));
 		}
 		if (titleTemplate != null && titleTemplate.exists()) { 
-			TaskThread titleThread = new TaskThread((new TitleTemplateTask()));
-			titleThread.start();
-			execs.add(titleThread);
+			execs.add(service.submit(new TitleTemplateTask(children)));
 		}
 		
-		List<TaskThread> children = new ArrayList<>();
 
-		for (TaskThread next : execs) {
+		for (Future<Throwable> next : execs) {
+			Throwable nextT;
 			try {
-				next.join();
-				if (next.task.error != null) {
-					getLog().error(next.task.error);
-				} else if (next.task instanceof RenderHtmlTask) {
-					TaskThread nextThread = ((RenderHtmlTask)(next.task)).children[0];
-					if (nextThread != null) {
-						children.add(nextThread);
-						children.add(((RenderHtmlTask)(next.task)).children[1]);
-						children.add(((RenderHtmlTask)(next.task)).children[2]);
-					}
-				} else {
-					TaskThread nextThread = ((TitleTemplateTask)(next.task)).children[0];
-					if (nextThread != null) {
-						children.add(nextThread);
-						children.add(((TitleTemplateTask)(next.task)).children[1]);
-						children.add(((TitleTemplateTask)(next.task)).children[2]);
-					}
+				nextT = next.get();
+				if (nextT != null) {
+					getLog().error(nextT);
 				}
-			} catch (InterruptedException e) {
-				throw new MojoExecutionException("Tasks interrupted", e);
+			} catch (InterruptedException | ExecutionException e) {
+				getLog().error(e);
 			}
 		}
 		Collections.sort(slideNames);
 		if (titleTemplate.exists()) {
 			slideNames.add(0, "title");
 		}
-		TaskThread defaultIndex = new TaskThread(new IndexTemplateTask(new File(htmlDirectory, "index-default.html"), htmls, notes, slideNames));
-		TaskThread followIndex = new TaskThread(new IndexTemplateTask(new File(htmlDirectory, "index-follow.html"), htmls, notes, slideNames));
-		TaskThread runIndex = new TaskThread(new IndexTemplateTask(new File(htmlDirectory, "index-run.html"), htmls, notes, slideNames));
-		defaultIndex.start();
-		followIndex.start();
-		runIndex.start();
-		children.add(defaultIndex);
-		children.add(followIndex);
-		children.add(runIndex);
-		waitForTasks(children);
+		children.add(service.submit((new IndexTemplateTask(new File(htmlDirectory, "index-default.html"), htmls, notes, slideNames))));
+		children.add(service.submit(new IndexTemplateTask(new File(htmlDirectory, "index-follow.html"), htmls, notes, slideNames)));
+		children.add(service.submit(new IndexTemplateTask(new File(htmlDirectory, "index-run.html"), htmls, notes, slideNames)));
+
+		for (Future<Throwable> next : children) {
+			Throwable nextT;
+			try {
+				nextT = next.get();
+				if (nextT != null) {
+					getLog().error(nextT);
+				}
+			} catch (InterruptedException | ExecutionException e) {
+				getLog().error(e);
+			}
+		}
+		
 		getLog().debug("Merging pdfs");
 		PDFMergerUtility merger = new PDFMergerUtility();
 		for( String sourceFileName : slideNames ) {
@@ -526,19 +516,6 @@ public class DopeMojo extends AbstractMojo {
 			throw new MojoExecutionException("Failed to merge pdf", e);
 		}
 
-	}
-
-	private void waitForTasks(List<TaskThread> children) throws MojoExecutionException {
-		for (TaskThread next : children) {
-			try {
-				next.join();
-				if (next.task.error != null) {
-					getLog().error(next.task.error);
-				}
-			} catch (InterruptedException e) {
-				throw new MojoExecutionException("Tasks interrupted", e);
-			}
-		}
 	}
 
 	private static void ensureDir(File dir) throws MojoExecutionException {
@@ -566,13 +543,11 @@ public class DopeMojo extends AbstractMojo {
 				String lang = WordUtils.capitalize(node.getType());
 				interpreter.set("code", node.getText());
 
-				// Simple use Pygments as you would in Python
 				interpreter.exec("from pygments import highlight\n"
 						+ "from pygments.lexers import " + lang + "Lexer\n"
 						+ "from pygments.formatters import HtmlFormatter\n"
 						+ "\nresult = highlight(code, " + lang + "Lexer(), HtmlFormatter())");
 
-				// Get the result that has been set in a variable
 				String ret = interpreter.get("result", String.class); 
 				if (ret != null) {
 					printer.print(ret);
