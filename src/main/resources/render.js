@@ -18,7 +18,9 @@ if (outname.endsWith(".pdf")) {
 }
 
 page.open(system.args[1], function () {
+  window.setTimeout(function () {
     page.render(outname);
     phantom.exit();
+  }, 200);
 });
 
