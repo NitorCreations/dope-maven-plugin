@@ -24,6 +24,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -51,9 +52,9 @@ import org.pegdown.ast.RootNode;
 import org.pegdown.ast.VerbatimNode;
 import org.python.util.PythonInterpreter;
 
+import com.github.jarlakxen.embedphantomjs.ExecutionTimeout;
 import com.github.jarlakxen.embedphantomjs.PhantomJSReference;
 import com.github.jarlakxen.embedphantomjs.executor.PhantomJSFileExecutor;
-import com.github.jarlakxen.embedphantomjs.executor.PhantomJSSyncFileExecutor;
 
 @Mojo( name = "render", defaultPhase = LifecyclePhase.COMPILE )
 public class DopeMojo extends AbstractMojo {
@@ -86,12 +87,15 @@ public class DopeMojo extends AbstractMojo {
 
 	@Parameter( defaultValue = "", property = "pngoptimizer" )
 	private String pngoptimizer;
+
+	@Parameter( defaultValue = "UTF-8", property = "charset" )
+	private String charset;
 	
 	private static File renderScript;
 	private static File videoPositionScript;
 
 	ExecutorService service = Executors.newCachedThreadPool();
-	
+
 	static {
 		try {
 			renderScript = extractFile("render.js", ".js");
@@ -99,47 +103,46 @@ public class DopeMojo extends AbstractMojo {
 		} catch (IOException e) {
 			throw new RuntimeException("Failed to create temporary resource", e);
 		}
-
-		try (FileOutputStream videoPositionScritpOutStream = new FileOutputStream(videoPositionScript); 
-				InputStream videoPositionScriptStream = 
-						DopeMojo.class.getClassLoader().getResourceAsStream("videoposition.js")) {
-			renderScript.deleteOnExit();
-			IOUtils.copy(videoPositionScriptStream, videoPositionScritpOutStream);
-		} catch (IOException e) {
-			throw new RuntimeException("Failed to create videoposition script", e);
-		}
-
 	}
-
 
 	public final class RenderHtmlTask implements Callable<Throwable> {
 		private final File out;
-		private final File nextSource;
 		private final Map<String, String> htmls;
 		private final Map<String, String> notes;
+		private final String markdown;
+		private final boolean isSlide;
+		private final String slideName;
+		private final long lastModified;
 		
 		public final List<Future<Throwable>> children;
 
-		private RenderHtmlTask(File nextSource, Map<String, String> htmls, Map<String, String> notes, List<Future<Throwable>> children) {
+		private RenderHtmlTask(File nextSource, Map<String, String> htmls, Map<String, String> notes, List<Future<Throwable>> children) throws IOException {
+			this(new String(Files.readAllBytes(Paths.get(nextSource.toURI())), Charset.defaultCharset()), 
+					htmls, notes, children, nextSource.getName().endsWith(".md"), nextSource.getName().replaceAll("\\.md(\\.notes)?$", ""), nextSource.lastModified());
+		}
+		
+		private RenderHtmlTask(String markdown, Map<String, String> htmls, Map<String, String> notes, 
+ 		         List<Future<Throwable>> children, boolean isSlide, String slideName, long lastModified) {
 			this.out = htmlDirectory;
-			this.nextSource = nextSource;
+			this.markdown = markdown;
 			this.htmls = htmls;
 			this.notes = notes;
 			this.children = children;
+			this.isSlide = isSlide;
+			this.slideName = slideName;
+			this.lastModified = lastModified;
 		}
 
 		public Throwable call() {
 			try {
 				PegDownProcessor processor = new PegDownProcessor(Extensions.AUTOLINKS + Extensions.TABLES + Extensions.FENCED_CODE_BLOCKS);
 
-				if (nextSource.getName().endsWith(".md")) {
-					String slideName = nextSource.getName().substring(0, nextSource.getName().length() - 3);
+				if (isSlide) {
 					File htmlFinal = new File(out, slideName + ".html");
-					String markdown = new String(Files.readAllBytes(Paths.get(nextSource.toURI())), Charset.defaultCharset());
 					RootNode astRoot = processor.parseMarkdown(markdown.toCharArray());
 					String nextHtml = new JHightlihtToHtmlSerializer().toHtml(astRoot);
 					htmls.put(slideName, nextHtml);
-					if (htmlFinal.exists()  && (htmlFinal.lastModified() >= nextSource.lastModified())) {
+					if (htmlFinal.exists()  && (htmlFinal.lastModified() >= lastModified)) {
 						return null;
 					}
 					MergeHtml m = new MergeHtml(nextHtml, slideName, htmlFinal);
@@ -148,8 +151,6 @@ public class DopeMojo extends AbstractMojo {
 					children.add(service.submit(new RenderPngPdfTask(htmlFinal, "pdf")));
 					children.add(service.submit(new VideoPositionTask(htmlFinal)));
 				} else {
-					String slideName = nextSource.getName().substring(0, nextSource.getName().length() - ".md.notes".length());
-					String markdown = new String(Files.readAllBytes(Paths.get(nextSource.toURI())), Charset.defaultCharset());
 					RootNode astRoot = processor.parseMarkdown(markdown.toCharArray());
 					String nextHtml = new JHightlihtToHtmlSerializer().toHtml(astRoot);
 					notes.put(slideName, nextHtml);
@@ -227,8 +228,13 @@ public class DopeMojo extends AbstractMojo {
 			if (finalPngPdf.exists() && (finalPngPdf.lastModified() >= nextSource.lastModified())) {
 				return null;
 			}
-			PhantomJSFileExecutor<String> ex = new PhantomJSSyncFileExecutor(PhantomJSReference.create().build());
-			String output = ex.execute(renderScript, nextSource.getAbsolutePath(), nextPngPdf.getAbsolutePath());
+			PhantomJSFileExecutor ex = new PhantomJSFileExecutor(PhantomJSReference.create().build(), new ExecutionTimeout(10, TimeUnit.SECONDS));
+			String output;
+			try {
+				output = ex.execute(renderScript, nextSource.getAbsolutePath(), nextPngPdf.getAbsolutePath()).get();
+			} catch (InterruptedException | ExecutionException e) {
+				return e;
+			}
 			if (output.length() == 0) {
 				nextPngPdf.renameTo(finalPngPdf);
 				if ("png".equals(format)) {
@@ -281,8 +287,13 @@ public class DopeMojo extends AbstractMojo {
 			if (finalVideo.exists() && (finalVideo.lastModified() >= nextSource.lastModified())) {
 				return null;
 			}
-			PhantomJSFileExecutor<String> ex = new PhantomJSSyncFileExecutor(PhantomJSReference.create().build());
-			String output = ex.execute(videoPositionScript, nextSource.getAbsolutePath());
+			PhantomJSFileExecutor ex = new PhantomJSFileExecutor(PhantomJSReference.create().build(), new ExecutionTimeout(10, TimeUnit.SECONDS));
+			String output;
+			try {
+				output = ex.execute(videoPositionScript, nextSource.getAbsolutePath()).get();
+			} catch (InterruptedException | ExecutionException e) {
+				return e;
+			}
 			if (output.length() > 0) {
 				try (FileOutputStream out = new FileOutputStream(nextVideo);
 						FileOutputStream smallOut = new FileOutputStream(nextSmallVideo);
@@ -457,13 +468,47 @@ public class DopeMojo extends AbstractMojo {
 		final List<Future<Throwable>> execs = new ArrayList<>();
 		final List<Future<Throwable>> children = new CopyOnWriteArrayList<>();
 		final ArrayList<String> slideNames = new ArrayList<>();
-		for (int i=0; i<sources.length;i++) {
+		for (int i=0; i<sources.length;i++) {			
 			final File nextSource = sources[i];
-			if (nextSource.getName().endsWith(".md")) {
-				slideNames.add(nextSource.getName().substring(0, nextSource.getName().length() - 3));
+			String fileName = nextSource.getName();
+			String slideName;
+			boolean isSlide = true;
+			if (fileName.endsWith(".md")) {
+				slideName = fileName.substring(0, fileName.length() - 3);
+			} else {
+				slideName = fileName.substring(0, fileName.length() - 9);
+				isSlide = false;
 			}
 			getLog().debug(String.format("Starting to process %s", nextSource.getAbsolutePath()));
-			execs.add(service.submit(new RenderHtmlTask(nextSource, htmls, notes, children)));
+			try {
+				String nextMarkdown = new String(Files.readAllBytes(Paths.get(nextSource.toURI())), Charset.forName(charset));
+				int slideStart = 0;
+				int nextStart = nextMarkdown.indexOf("<!--break", slideStart);
+				boolean nextIsSlide = isSlide;
+				int index=0;
+				while (nextStart > -1) {
+					String slideId = slideName + "$" + index;
+					if (nextIsSlide) {
+						slideNames.add(slideId);
+						index++;
+					} else {
+						slideId = slideName + "$" + (index-1);
+					}
+					execs.add(service.submit(new RenderHtmlTask(nextMarkdown.substring(slideStart, nextStart), htmls, notes, children, nextIsSlide, slideId, nextSource.lastModified())));
+					nextIsSlide = !nextMarkdown.regionMatches(nextStart, "<!--break:notes", 0, "<!--break:notes".length());
+					slideStart = nextStart;
+					nextStart = nextMarkdown.indexOf("<!--break", slideStart + 1);
+				}
+				String slideId = slideName + "$" + index;
+				if (nextIsSlide) {
+					slideNames.add(slideId);
+				} else {
+					slideId = slideName + "$" + (index-1);
+				}
+				execs.add(service.submit(new RenderHtmlTask(nextMarkdown.substring(slideStart), htmls, notes, children, nextIsSlide, slideId, nextSource.lastModified())));
+			} catch (IOException e) {
+				getLog().error(e);
+			}
 		}
 		if (titleTemplate != null && titleTemplate.exists()) { 
 			execs.add(service.submit(new TitleTemplateTask(children)));
