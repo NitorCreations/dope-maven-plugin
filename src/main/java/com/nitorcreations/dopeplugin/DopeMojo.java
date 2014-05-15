@@ -140,7 +140,7 @@ public class DopeMojo extends AbstractMojo {
 				if (isSlide) {
 					File htmlFinal = new File(out, slideName + ".html");
 					RootNode astRoot = processor.parseMarkdown(markdown.toCharArray());
-					String nextHtml = new JHightlihtToHtmlSerializer().toHtml(astRoot);
+					String nextHtml = new PygmentsToHtmlSerializer().toHtml(astRoot);
 					htmls.put(slideName, nextHtml);
 					if (htmlFinal.exists()  && (htmlFinal.lastModified() >= lastModified)) {
 						return null;
@@ -152,7 +152,7 @@ public class DopeMojo extends AbstractMojo {
 					children.add(service.submit(new VideoPositionTask(htmlFinal)));
 				} else {
 					RootNode astRoot = processor.parseMarkdown(markdown.toCharArray());
-					String nextHtml = new JHightlihtToHtmlSerializer().toHtml(astRoot);
+					String nextHtml = new PygmentsToHtmlSerializer().toHtml(astRoot);
 					notes.put(slideName, nextHtml);
 				}
 
@@ -533,6 +533,7 @@ public class DopeMojo extends AbstractMojo {
 		children.add(service.submit((new IndexTemplateTask(new File(htmlDirectory, "index-default.html"), htmls, notes, slideNames))));
 		children.add(service.submit(new IndexTemplateTask(new File(htmlDirectory, "index-follow.html"), htmls, notes, slideNames)));
 		children.add(service.submit(new IndexTemplateTask(new File(htmlDirectory, "index-run.html"), htmls, notes, slideNames)));
+		children.add(service.submit(new IndexTemplateTask(new File(htmlDirectory, "index-reveal.html"), htmls, notes, slideNames)));
 
 		for (Future<Throwable> next : children) {
 			Throwable nextT;
@@ -572,12 +573,12 @@ public class DopeMojo extends AbstractMojo {
 		}
 	}
 
-	private class JHightlihtToHtmlSerializer extends ToHtmlSerializer {
+	private class PygmentsToHtmlSerializer extends ToHtmlSerializer {
 
-		public JHightlihtToHtmlSerializer() {
+		public PygmentsToHtmlSerializer() {
 			this(new LinkRenderer());
 		}
-		public JHightlihtToHtmlSerializer(LinkRenderer linkRenderer) {
+		public PygmentsToHtmlSerializer(LinkRenderer linkRenderer) {
 			super(linkRenderer);
 		}
 
