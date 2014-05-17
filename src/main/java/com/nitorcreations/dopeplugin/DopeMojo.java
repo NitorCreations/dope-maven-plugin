@@ -15,6 +15,8 @@ import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Callable;
@@ -392,14 +394,8 @@ public class DopeMojo extends AbstractMojo {
 			ve.setProperty("file.resource.loader.path", "");
 			ve.init();
 			Template t = ve.getTemplate(nextIndex.getAbsolutePath());
-			VelocityContext context = new VelocityContext();
-			context.put("name", name);
-			context.put("htmls", htmls);
-			context.put("notes", notes);
-			context.put("slidenames", slideNames);
-			context.put("project", project);
-			context.put("css", css);
 			File nextOut = new File(nextIndex.getParent(), nextIndex.getName() + ".tmp");
+			VelocityContext context = createContext();
 			try (FileWriter w = new FileWriter(nextOut)){
 				t.merge( context, w);
 				w.flush();
@@ -409,8 +405,32 @@ public class DopeMojo extends AbstractMojo {
 			}
 			return null;
 		}
+		protected VelocityContext createContext() {
+			VelocityContext context = new VelocityContext();
+			context.put("name", name);
+			context.put("htmls", htmls);
+			context.put("notes", notes);
+			context.put("slidenames", slideNames);
+			context.put("project", project);
+			context.put("css", css);
+			return context;
+		}
 	}
-	
+	public class DefaultIndexTemplateTask extends IndexTemplateTask {
+		private final Map<String, String> renderedIndexes;
+
+		private DefaultIndexTemplateTask(File nextIndex, Map<String, String> htmls, Map<String, String> notes, 
+				List<String> slideNames, Map<String, String> renderedIndexes) {
+			super(nextIndex,htmls, notes, slideNames);
+			this.renderedIndexes = renderedIndexes;
+		}
+		@Override
+		protected VelocityContext createContext() {
+			VelocityContext context = super.createContext();
+			context.put("indexes", renderedIndexes);
+			return context;
+		}
+	}
 	public final class TitleTemplateTask extends IndexTemplateTask {
 		private final List<Future<Throwable>> children;
 		public TitleTemplateTask(List<Future<Throwable>> children) {
@@ -530,10 +550,19 @@ public class DopeMojo extends AbstractMojo {
 		if (titleTemplate.exists()) {
 			slideNames.add(0, "title");
 		}
-		children.add(service.submit((new IndexTemplateTask(new File(htmlDirectory, "index-default.html"), htmls, notes, slideNames))));
-		children.add(service.submit(new IndexTemplateTask(new File(htmlDirectory, "index-follow.html"), htmls, notes, slideNames)));
-		children.add(service.submit(new IndexTemplateTask(new File(htmlDirectory, "index-run.html"), htmls, notes, slideNames)));
-		children.add(service.submit(new IndexTemplateTask(new File(htmlDirectory, "index-reveal.html"), htmls, notes, slideNames)));
+		LinkedHashMap<String, String> renderedIndexes = new LinkedHashMap<>();
+		LinkedHashMap<String, String> index = new LinkedHashMap<String, String>();
+		index.put("run", "Run presentation");
+		index.put("follow", "Follow presentation");
+		index.put("reveal", "Web version of the presentation");
+		for (String nextIndex : index.keySet()) {
+			File nextIndexFile = new File(htmlDirectory, "index-"  + nextIndex + ".html");
+			if (nextIndexFile.exists()) {
+		      children.add(service.submit(new IndexTemplateTask(nextIndexFile, htmls, notes, slideNames)));
+		      renderedIndexes.put(nextIndex, index.get(nextIndex));
+			}
+		}
+		children.add(service.submit((new DefaultIndexTemplateTask(new File(htmlDirectory, "index-default.html"), htmls, notes, slideNames, renderedIndexes))));
 
 		for (Future<Throwable> next : children) {
 			Throwable nextT;
