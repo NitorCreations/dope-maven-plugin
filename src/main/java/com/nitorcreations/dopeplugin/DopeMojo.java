@@ -32,7 +32,10 @@ import java.util.regex.Pattern;
 
 import javax.imageio.ImageIO;
 
+import org.apache.commons.io.FileUtils;
 import org.apache.commons.io.IOUtils;
+import org.apache.commons.lang.RandomStringUtils;
+import org.apache.commons.lang.StringUtils;
 import org.apache.commons.lang.WordUtils;
 import org.apache.maven.plugin.AbstractMojo;
 import org.apache.maven.plugin.MojoExecutionException;
@@ -92,6 +95,9 @@ public class DopeMojo extends AbstractMojo {
 
 	@Parameter( defaultValue = "UTF-8", property = "charset" )
 	private String charset;
+
+	@Parameter( defaultValue = "embedded", property = "phantomjs" )
+	private String phantomjs;
 	
 	private static File renderScript;
 	private static File videoPositionScript;
@@ -149,8 +155,8 @@ public class DopeMojo extends AbstractMojo {
 					}
 					MergeHtml m = new MergeHtml(nextHtml, slideName, htmlFinal);
 					m.merge();
-					children.add(service.submit(new RenderPngPdfTask(htmlFinal, "png")));
-					children.add(service.submit(new RenderPngPdfTask(htmlFinal, "pdf")));
+					children.add(service.submit(new RenderPngPdfTask(htmlFinal, "png", phantomjs)));
+					children.add(service.submit(new RenderPngPdfTask(htmlFinal, "pdf", phantomjs)));
 					children.add(service.submit(new VideoPositionTask(htmlFinal)));
 				} else {
 					RootNode astRoot = processor.parseMarkdown(markdown.toCharArray());
@@ -208,12 +214,14 @@ public class DopeMojo extends AbstractMojo {
 		private final File smallSlides;
 		private final File nextSource;
 		private final String format;
+		private final String phantomjs;
 
-		private RenderPngPdfTask(File nextSource, String format) {
+		private RenderPngPdfTask(File nextSource, String format, String phantomjs) {
 			this.slides = slidesDirectory;
 			this.smallSlides = smallSlidesDirectory;
 			this.nextSource = nextSource;
 			this.format = format;
+			this.phantomjs = phantomjs;
 		}
 
 		@Override
@@ -230,12 +238,20 @@ public class DopeMojo extends AbstractMojo {
 			if (finalPngPdf.exists() && (finalPngPdf.lastModified() >= nextSource.lastModified())) {
 				return null;
 			}
-			PhantomJSFileExecutor ex = new PhantomJSFileExecutor(PhantomJSReference.create().build(), new ExecutionTimeout(10, TimeUnit.SECONDS));
 			String output;
-			try {
-				output = ex.execute(renderScript, nextSource.getAbsolutePath(), nextPngPdf.getAbsolutePath()).get();
-			} catch (InterruptedException | ExecutionException e) {
-				return e;
+			if ("embedded".equals(phantomjs)) {
+				PhantomJSFileExecutor ex = new PhantomJSFileExecutor(PhantomJSReference.create().build(), new ExecutionTimeout(10, TimeUnit.SECONDS));
+				try {
+					output = ex.execute(renderScript, nextSource.getAbsolutePath(), nextPngPdf.getAbsolutePath()).get();
+				} catch (InterruptedException | ExecutionException e) {
+					return e;
+				}
+			} else {
+				try {
+					output = new NativePhantomjs().exec(phantomjs, renderScript, nextSource, nextPngPdf);
+				} catch (IOException | InterruptedException e) {
+					return e;
+				}
 			}
 			if (output.length() == 0) {
 				nextPngPdf.renameTo(finalPngPdf);
@@ -289,12 +305,20 @@ public class DopeMojo extends AbstractMojo {
 			if (finalVideo.exists() && (finalVideo.lastModified() >= nextSource.lastModified())) {
 				return null;
 			}
-			PhantomJSFileExecutor ex = new PhantomJSFileExecutor(PhantomJSReference.create().build(), new ExecutionTimeout(10, TimeUnit.SECONDS));
 			String output;
-			try {
-				output = ex.execute(videoPositionScript, nextSource.getAbsolutePath()).get();
-			} catch (InterruptedException | ExecutionException e) {
-				return e;
+			if ("embedded".equals(phantomjs)) {
+				PhantomJSFileExecutor ex = new PhantomJSFileExecutor(PhantomJSReference.create().build(), new ExecutionTimeout(10, TimeUnit.SECONDS));
+				try {
+					output = ex.execute(videoPositionScript, nextSource.getAbsolutePath()).get();
+				} catch (InterruptedException | ExecutionException e) {
+					return e;
+				}
+			} else {
+				try {
+					output = new NativePhantomjs().exec(phantomjs, videoPositionScript, nextSource);
+				} catch (IOException | InterruptedException e) {
+					return e;
+				}
 			}
 			if (output.length() > 0) {
 				try (FileOutputStream out = new FileOutputStream(nextVideo);
@@ -441,8 +465,8 @@ public class DopeMojo extends AbstractMojo {
 		public Throwable call() {
 			Throwable superRes = super.call();
 			if (superRes == null) {
-				children.add(service.submit(new RenderPngPdfTask(titleTemplate, "png")));
-				children.add(service.submit(new RenderPngPdfTask(titleTemplate, "pdf")));
+				children.add(service.submit(new RenderPngPdfTask(titleTemplate, "png", phantomjs)));
+				children.add(service.submit(new RenderPngPdfTask(titleTemplate, "pdf", phantomjs)));
 				children.add(service.submit(new VideoPositionTask(titleTemplate)));
 				return null;
 			} else {
@@ -641,5 +665,21 @@ public class DopeMojo extends AbstractMojo {
 			}
 		}
 	}
-
+	
+	private static class NativePhantomjs {
+		public String exec(String phantomjs, File renderScript, File nextSource, File nextPngPdf) throws IOException, InterruptedException {
+			ProcessBuilder b = new ProcessBuilder(phantomjs, renderScript.getAbsolutePath(), nextSource.getAbsolutePath(), nextPngPdf.getAbsolutePath());
+			b.environment().putAll(System.getenv());
+			Process p = b.start();
+			p.waitFor();
+			return IOUtils.toString(p.getInputStream());
+		}
+		public String exec(String phantomjs, File renderScript, File nextSource) throws IOException, InterruptedException {
+			ProcessBuilder b = new ProcessBuilder(phantomjs, renderScript.getAbsolutePath(), nextSource.getAbsolutePath());
+			b.environment().putAll(System.getenv());
+			Process p = b.start();
+			p.waitFor();
+			return IOUtils.toString(p.getInputStream());
+		}
+	}
 }
