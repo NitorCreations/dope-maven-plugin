@@ -15,7 +15,6 @@ import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -26,16 +25,16 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.LinkedBlockingDeque;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 import javax.imageio.ImageIO;
 
-import org.apache.commons.io.FileUtils;
 import org.apache.commons.io.IOUtils;
-import org.apache.commons.lang.RandomStringUtils;
-import org.apache.commons.lang.StringUtils;
 import org.apache.commons.lang.WordUtils;
 import org.apache.maven.plugin.AbstractMojo;
 import org.apache.maven.plugin.MojoExecutionException;
@@ -57,9 +56,9 @@ import org.pegdown.ast.RootNode;
 import org.pegdown.ast.VerbatimNode;
 import org.python.util.PythonInterpreter;
 
-import com.github.jarlakxen.embedphantomjs.ExecutionTimeout;
 import com.github.jarlakxen.embedphantomjs.PhantomJSReference;
 import com.github.jarlakxen.embedphantomjs.executor.PhantomJSFileExecutor;
+import com.github.jarlakxen.embedphantomjs.executor.PhantomJSSyncFileExecutor;
 
 @Mojo( name = "render", defaultPhase = LifecyclePhase.COMPILE )
 public class DopeMojo extends AbstractMojo {
@@ -90,7 +89,7 @@ public class DopeMojo extends AbstractMojo {
 	@Parameter( defaultValue = "${project}", required = true )
 	private MavenProject project;
 
-	@Parameter( defaultValue = "", property = "pngoptimizer" )
+	@Parameter( defaultValue = "", property = "pngoptimizer")
 	private String pngoptimizer;
 
 	@Parameter( defaultValue = "UTF-8", property = "charset" )
@@ -99,13 +98,15 @@ public class DopeMojo extends AbstractMojo {
 	@Parameter( defaultValue = "embedded", property = "phantomjs" )
 	private String phantomjs;
 	
+	private static File checkScript;
 	private static File renderScript;
 	private static File videoPositionScript;
 
-	ExecutorService service = Executors.newCachedThreadPool();
-
+	ExecutorService service = new ThreadPoolExecutor(Runtime.getRuntime().availableProcessors(), 
+			Runtime.getRuntime().availableProcessors() * 4, 10, TimeUnit.SECONDS, new LinkedBlockingQueue<Runnable>(100));
 	static {
 		try {
+			checkScript = extractFile("check.js", ".js");
 			renderScript = extractFile("render.js", ".js");
 			videoPositionScript = extractFile("videoposition.js", ".js");
 		} catch (IOException e) {
@@ -240,12 +241,8 @@ public class DopeMojo extends AbstractMojo {
 			}
 			String output;
 			if ("embedded".equals(phantomjs)) {
-				PhantomJSFileExecutor ex = new PhantomJSFileExecutor(PhantomJSReference.create().build(), new ExecutionTimeout(10, TimeUnit.SECONDS));
-				try {
-					output = ex.execute(renderScript, nextSource.getAbsolutePath(), nextPngPdf.getAbsolutePath()).get();
-				} catch (InterruptedException | ExecutionException e) {
-					return e;
-				}
+				PhantomJSFileExecutor<String> ex = new PhantomJSSyncFileExecutor(PhantomJSReference.create().build());
+				output = ex.execute(renderScript, nextSource.getAbsolutePath(), nextPngPdf.getAbsolutePath());
 			} else {
 				try {
 					output = new NativePhantomjs().exec(phantomjs, renderScript, nextSource, nextPngPdf);
@@ -257,7 +254,7 @@ public class DopeMojo extends AbstractMojo {
 				nextPngPdf.renameTo(finalPngPdf);
 				if ("png".equals(format)) {
 					try {
-						Future<Throwable> ob = service.submit(new OptimizePngTask(finalPngPdf));
+						Throwable bt = new OptimizePngTask(finalPngPdf).call();
 						BufferedImage image = ImageIO.read(finalPngPdf);
 						BufferedImage smallImage =
 								Scalr.resize(image, Scalr.Method.QUALITY, Scalr.Mode.FIT_TO_WIDTH,
@@ -266,15 +263,13 @@ public class DopeMojo extends AbstractMojo {
 						File finalSmallPng = new File(smallSlides, finalPngPdf.getName());
 						ImageIO.write(smallImage, "png", nextSmallPng);
 						nextSmallPng.renameTo(finalSmallPng);
-						Future<Throwable> os = service.submit(new OptimizePngTask(finalSmallPng));
-						Throwable bt = ob.get();
-						Throwable st = os.get();
+						Throwable st = new OptimizePngTask(finalSmallPng).call();
 						if (bt != null) {
 							return bt;
 						} else {
 							return st;
 						}
-					} catch (IOException | InterruptedException | ExecutionException e) {
+					} catch (IOException e) {
 						return e;
 					}
 				}
@@ -307,12 +302,8 @@ public class DopeMojo extends AbstractMojo {
 			}
 			String output;
 			if ("embedded".equals(phantomjs)) {
-				PhantomJSFileExecutor ex = new PhantomJSFileExecutor(PhantomJSReference.create().build(), new ExecutionTimeout(10, TimeUnit.SECONDS));
-				try {
-					output = ex.execute(videoPositionScript, nextSource.getAbsolutePath()).get();
-				} catch (InterruptedException | ExecutionException e) {
-					return e;
-				}
+				PhantomJSFileExecutor<String> ex = new PhantomJSSyncFileExecutor(PhantomJSReference.create().build());
+				output = ex.execute(renderScript, nextSource.getAbsolutePath());
 			} else {
 				try {
 					output = new NativePhantomjs().exec(phantomjs, videoPositionScript, nextSource);
@@ -506,6 +497,11 @@ public class DopeMojo extends AbstractMojo {
 				return name.endsWith(".md") || name.endsWith(".md.notes");
 			}
 		});
+		if ("embedded".equals(phantomjs)) {
+			getLog().info("Ensuring phantomjs");
+			PhantomJSSyncFileExecutor ex = new PhantomJSSyncFileExecutor(PhantomJSReference.create().build());
+			ex.execute(checkScript);
+		}
 		getLog().info(String.format("Processing %d markdown files", sources.length));
 		final Map<String, String> notes = new ConcurrentHashMap<>();
 		final Map<String, String> htmls = new ConcurrentHashMap<>();
