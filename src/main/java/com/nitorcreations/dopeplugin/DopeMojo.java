@@ -100,6 +100,7 @@ public class DopeMojo extends AbstractMojo {
 	
 	private static File checkScript;
 	private static File renderScript;
+	private static File printScript;
 	private static File videoPositionScript;
 
 	ExecutorService service = new ThreadPoolExecutor(Runtime.getRuntime().availableProcessors(), 
@@ -108,6 +109,7 @@ public class DopeMojo extends AbstractMojo {
 		try {
 			checkScript = extractFile("check.js", ".js");
 			renderScript = extractFile("render.js", ".js");
+			printScript = extractFile("print.js", ".js");
 			videoPositionScript = extractFile("videoposition.js", ".js");
 		} catch (IOException e) {
 			throw new RuntimeException("Failed to create temporary resource", e);
@@ -210,12 +212,13 @@ public class DopeMojo extends AbstractMojo {
 		}
 	}
 
-	public final class RenderPngPdfTask implements Callable<Throwable> {
+	public class RenderPngPdfTask implements Callable<Throwable> {
 		private final File slides;
 		private final File smallSlides;
 		private final File nextSource;
 		private final String format;
 		private final String phantomjs;
+		protected File script;
 
 		private RenderPngPdfTask(File nextSource, String format, String phantomjs) {
 			this.slides = slidesDirectory;
@@ -223,6 +226,7 @@ public class DopeMojo extends AbstractMojo {
 			this.nextSource = nextSource;
 			this.format = format;
 			this.phantomjs = phantomjs;
+			this.script = renderScript;
 		}
 
 		@Override
@@ -242,10 +246,10 @@ public class DopeMojo extends AbstractMojo {
 			String output;
 			if ("embedded".equals(phantomjs)) {
 				PhantomJSFileExecutor<String> ex = new PhantomJSSyncFileExecutor(PhantomJSReference.create().build());
-				output = ex.execute(renderScript, nextSource.getAbsolutePath(), nextPngPdf.getAbsolutePath());
+				output = ex.execute(script, nextSource.getAbsolutePath(), nextPngPdf.getAbsolutePath());
 			} else {
 				try {
-					output = new NativePhantomjs().exec(phantomjs, renderScript, nextSource, nextPngPdf);
+					output = new NativePhantomjs().exec(phantomjs, script, nextSource, nextPngPdf);
 				} catch (IOException | InterruptedException e) {
 					return e;
 				}
@@ -279,6 +283,14 @@ public class DopeMojo extends AbstractMojo {
 			return null;
 		}
 	}
+
+	public class PrintTask extends RenderPngPdfTask {
+		public PrintTask(File nextSource, String phantomjs) {
+			super(nextSource, "pdf", phantomjs);
+			this.script = printScript;
+		}
+	}
+
 	public final class VideoPositionTask implements Callable<Throwable> {
 		private final File slides;
 		private final File smallSlides;
@@ -575,6 +587,7 @@ public class DopeMojo extends AbstractMojo {
 		index.put("run", "Run presentation");
 		index.put("follow", "Follow presentation");
 		index.put("reveal", "Web version of the presentation");
+		index.put("notes", "Slides and presenter notes for printing");
 		for (String nextIndex : index.keySet()) {
 			File nextIndexFile = new File(htmlDirectory, "index-"  + nextIndex + ".html");
 			if (nextIndexFile.exists()) {
@@ -595,7 +608,11 @@ public class DopeMojo extends AbstractMojo {
 				getLog().error(e);
 			}
 		}
-		
+		Throwable err = new PrintTask(new File(htmlDirectory, "index-notes.html"), phantomjs).call();
+		if (err != null) {
+			getLog().error("Creating presenter notes pdf failed", err);
+		}
+		new File(buildDirectory, "index-notes.pdf").renameTo(new File(htmlDirectory, "presentation-notes.pdf"));
 		getLog().debug("Merging pdfs");
 		PDFMergerUtility merger = new PDFMergerUtility();
 		for( String sourceFileName : slideNames ) {
