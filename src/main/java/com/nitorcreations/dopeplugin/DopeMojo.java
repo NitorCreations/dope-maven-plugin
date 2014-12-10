@@ -61,45 +61,45 @@ import com.github.jarlakxen.embedphantomjs.executor.PhantomJSSyncFileExecutor;
 @Mojo( name = "render", defaultPhase = LifecyclePhase.COMPILE )
 public class DopeMojo extends AbstractMojo {
 	@Parameter( defaultValue = "${project.build.directory}/classes/markdown", property = "markdownDir", required = true )
-	private File markdownDirectory;
+	protected File markdownDirectory;
 
 	@Parameter( defaultValue = "${project.build.directory}/classes/html", property = "htmlDir", required = true )
-	private File htmlDirectory;
+	protected File htmlDirectory;
 
-	private File htmlTemplate;
-	private File titleTemplate;
+	protected File htmlTemplate;
+	protected File titleTemplate;
 
 	@Parameter( defaultValue = "${project.build.directory}/classes/slides", property = "buildDir", required = true )
-	private File slidesDirectory;
+	protected File slidesDirectory;
 
 	@Parameter( defaultValue = "${project.build.directory}/classes/slides-small", property = "buildDir", required = true )
-	private File smallSlidesDirectory;
+	protected File smallSlidesDirectory;
 
 	@Parameter( defaultValue = "${project.build.directory}", property = "buildDir", required = true )
-	private File buildDirectory;
+	protected File buildDirectory;
 
 	@Parameter( defaultValue = "${project.groupId}.css", property = "css", required = true )
-	private String css;
+	protected String css;
 
 	@Parameter( defaultValue = "${project.name}", property = "name", required = true )
-	private String name;
+	protected String name;
 
 	@Parameter( defaultValue = "${project}", required = true )
-	private MavenProject project;
+	protected MavenProject project;
 
 	@Parameter( defaultValue = "", property = "pngoptimizer")
-	private String pngoptimizer;
+	protected String pngoptimizer;
 
 	@Parameter( defaultValue = "UTF-8", property = "charset" )
-	private String charset;
+	protected String charset;
 
 	@Parameter( defaultValue = "embedded", property = "phantomjs" )
-	private String phantomjs;
+	protected String phantomjs;
 	
-	private static File checkScript;
-	private static File renderScript;
-	private static File printScript;
-	private static File videoPositionScript;
+	protected static File checkScript;
+	protected static File renderScript;
+	protected static File printScript;
+	protected static File videoPositionScript;
 
 	ExecutorService service = new ThreadPoolExecutor(Runtime.getRuntime().availableProcessors(), 
 			Runtime.getRuntime().availableProcessors() * 4, 10, TimeUnit.SECONDS, new LinkedBlockingQueue<Runnable>(100));
@@ -537,23 +537,23 @@ public class DopeMojo extends AbstractMojo {
 				boolean nextIsSlide = isSlide;
 				int index=0;
 				while (nextStart > -1) {
-					String slideId = slideName + "$" + index;
+					String slideId = slideName + "$" + String.format("%03d", index);
 					if (nextIsSlide) {
 						slideNames.add(slideId);
 						index++;
 					} else {
-						slideId = slideName + "$" + (index-1);
+						slideId = slideName + "$" + String.format("%03d", (index-1));
 					}
 					execs.add(service.submit(new RenderHtmlTask(nextMarkdown.substring(slideStart, nextStart), htmls, notes, children, nextIsSlide, slideId, nextSource.lastModified())));
 					nextIsSlide = !nextMarkdown.regionMatches(nextStart, "<!--break:notes", 0, "<!--break:notes".length());
 					slideStart = nextStart;
 					nextStart = nextMarkdown.indexOf("<!--break", slideStart + 1);
 				}
-				String slideId = slideName + "$" + index;
+				String slideId = slideName + "$" + String.format("%03d", index);
 				if (nextIsSlide) {
 					slideNames.add(slideId);
 				} else {
-					slideId = slideName + "$" + (index-1);
+					slideId = slideName + "$" + String.format("%03d", (index-1));
 				}
 				execs.add(service.submit(new RenderHtmlTask(nextMarkdown.substring(slideStart), htmls, notes, children, nextIsSlide, slideId, nextSource.lastModified())));
 			} catch (IOException e) {

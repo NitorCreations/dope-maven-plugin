@@ -22,6 +22,7 @@
   <scm>
     <developerConnection>scm:git:git@github.com:NitorCreations/dope-maven-plugin.git</developerConnection>
     <connection>scm:git:git@github.com:NitorCreations/dope-maven-plugin.git</connection>
+    <url>https://github.com/NitorCreations/dope-maven-plugin</url>
     <tag>HEAD</tag>
   </scm>
 
