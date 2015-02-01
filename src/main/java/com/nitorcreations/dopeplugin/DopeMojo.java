@@ -54,9 +54,9 @@ import org.pegdown.ast.RootNode;
 import org.pegdown.ast.VerbatimNode;
 import org.python.util.PythonInterpreter;
 
+import com.github.jarlakxen.embedphantomjs.ExecutionTimeout;
 import com.github.jarlakxen.embedphantomjs.PhantomJSReference;
 import com.github.jarlakxen.embedphantomjs.executor.PhantomJSFileExecutor;
-import com.github.jarlakxen.embedphantomjs.executor.PhantomJSSyncFileExecutor;
 
 @Mojo( name = "render", defaultPhase = LifecyclePhase.COMPILE )
 public class DopeMojo extends AbstractMojo {
@@ -95,6 +95,9 @@ public class DopeMojo extends AbstractMojo {
 
 	@Parameter( defaultValue = "embedded", property = "phantomjs" )
 	protected String phantomjs;
+	
+	@Parameter( defaultValue = "false", property = "pdfonly" )
+	protected boolean pdfonly;
 	
 	protected static File checkScript;
 	protected static File renderScript;
@@ -156,9 +159,11 @@ public class DopeMojo extends AbstractMojo {
 					}
 					MergeHtml m = new MergeHtml(nextHtml, slideName, htmlFinal);
 					m.merge();
-					children.add(service.submit(new RenderPngPdfTask(htmlFinal, "png", phantomjs)));
+					if (!pdfonly) {
+						children.add(service.submit(new RenderPngPdfTask(htmlFinal, "png", phantomjs)));
+						children.add(service.submit(new VideoPositionTask(htmlFinal)));
+					}
 					children.add(service.submit(new RenderPngPdfTask(htmlFinal, "pdf", phantomjs)));
-					children.add(service.submit(new VideoPositionTask(htmlFinal)));
 				} else {
 					RootNode astRoot = processor.parseMarkdown(markdown.toCharArray());
 					String nextHtml = new PygmentsToHtmlSerializer().toHtml(astRoot);
@@ -241,10 +246,14 @@ public class DopeMojo extends AbstractMojo {
 			if (finalPngPdf.exists() && (finalPngPdf.lastModified() >= nextSource.lastModified())) {
 				return null;
 			}
-			String output;
+			String output="";
 			if ("embedded".equals(phantomjs)) {
-				PhantomJSFileExecutor<String> ex = new PhantomJSSyncFileExecutor(PhantomJSReference.create().build());
-				output = ex.execute(script, nextSource.getAbsolutePath(), nextPngPdf.getAbsolutePath());
+				PhantomJSFileExecutor ex = new PhantomJSFileExecutor(PhantomJSReference.create().build(), new ExecutionTimeout(300, TimeUnit.SECONDS));
+				try {
+					output = ex.execute(script, nextSource.getAbsolutePath(), nextPngPdf.getAbsolutePath()).get();
+				} catch (InterruptedException | ExecutionException e) {
+					return e;
+				}
 			} else {
 				try {
 					output = new NativePhantomjs().exec(phantomjs, script, nextSource, nextPngPdf);
@@ -312,8 +321,12 @@ public class DopeMojo extends AbstractMojo {
 			}
 			String output;
 			if ("embedded".equals(phantomjs)) {
-				PhantomJSFileExecutor<String> ex = new PhantomJSSyncFileExecutor(PhantomJSReference.create().build());
-				output = ex.execute(renderScript, nextSource.getAbsolutePath());
+				PhantomJSFileExecutor ex = new PhantomJSFileExecutor(PhantomJSReference.create().build(), new ExecutionTimeout(300, TimeUnit.SECONDS));
+				try {
+					output = ex.execute(renderScript, nextSource.getAbsolutePath()).get();
+				} catch (InterruptedException | ExecutionException e) {
+					return e;
+				}
 			} else {
 				try {
 					output = new NativePhantomjs().exec(phantomjs, videoPositionScript, nextSource);
@@ -466,9 +479,11 @@ public class DopeMojo extends AbstractMojo {
 		public Throwable call() {
 			Throwable superRes = super.call();
 			if (superRes == null) {
-				children.add(service.submit(new RenderPngPdfTask(titleTemplate, "png", phantomjs)));
+				if (!pdfonly) {
+					children.add(service.submit(new RenderPngPdfTask(titleTemplate, "png", phantomjs)));
+					children.add(service.submit(new VideoPositionTask(titleTemplate)));
+				}
 				children.add(service.submit(new RenderPngPdfTask(titleTemplate, "pdf", phantomjs)));
-				children.add(service.submit(new VideoPositionTask(titleTemplate)));
 				return null;
 			} else {
 				return superRes;
@@ -509,7 +524,7 @@ public class DopeMojo extends AbstractMojo {
 		});
 		if ("embedded".equals(phantomjs)) {
 			getLog().info("Ensuring phantomjs");
-			PhantomJSSyncFileExecutor ex = new PhantomJSSyncFileExecutor(PhantomJSReference.create().build());
+			PhantomJSFileExecutor ex = new PhantomJSFileExecutor(PhantomJSReference.create().build(), new ExecutionTimeout(300, TimeUnit.SECONDS));
 			ex.execute(checkScript);
 		}
 		getLog().info(String.format("Processing %d markdown files", sources.length));
