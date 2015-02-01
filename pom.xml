@@ -3,7 +3,7 @@
 
   <groupId>com.nitorcreations</groupId>
   <artifactId>dope-maven-plugin</artifactId>
-  <version>1.13-SNAPSHOT</version>
+  <version>1.13</version>
   <packaging>maven-plugin</packaging>
   <name>Developer Oriented Presentation Engine Maven Plugin</name>
   <url>https://github.com/NitorCreations/dope-maven-plugin</url>
@@ -232,6 +232,9 @@
                 <goals>
                   <goal>jar</goal>
                 </goals>
+                <configuration>
+                  <failOnError>false</failOnError>
+                </configuration>
               </execution>
             </executions>
           </plugin>
