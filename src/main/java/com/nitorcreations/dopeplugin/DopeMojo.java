@@ -38,8 +38,6 @@ import java.util.zip.GZIPInputStream;
 import javax.imageio.ImageIO;
 
 import org.apache.commons.lang.WordUtils;
-import org.apache.maven.artifact.ArtifactUtils;
-import org.apache.maven.artifact.repository.ArtifactRepository;
 import org.apache.maven.plugin.AbstractMojo;
 import org.apache.maven.plugin.MojoExecutionException;
 import org.apache.maven.plugins.annotations.Component;
@@ -56,7 +54,6 @@ import org.eclipse.aether.RepositorySystem;
 import org.eclipse.aether.RepositorySystemSession;
 import org.eclipse.aether.artifact.DefaultArtifact;
 import org.eclipse.aether.graph.Dependency;
-import org.eclipse.aether.repository.LocalRepository;
 import org.eclipse.aether.repository.RemoteRepository;
 import org.eclipse.aether.resolution.ArtifactRequest;
 import org.eclipse.aether.resolution.ArtifactResolutionException;
@@ -674,20 +671,21 @@ public class DopeMojo extends AbstractMojo {
 			try {
 				if (!node.getType().isEmpty()) {
 					synchronized (this.getClass()) {
-						PythonInterpreter interpreter = new PythonInterpreter();
-						String lang = WordUtils.capitalize(node.getType());
-						interpreter.set("code", node.getText());
+						try (PythonInterpreter interpreter = new PythonInterpreter()) {
+							String lang = WordUtils.capitalize(node.getType());
+							interpreter.set("code", node.getText());
 
-						interpreter.exec("from pygments import highlight\n"
-								+ "from pygments.lexers import " + lang + "Lexer\n"
-								+ "from pygments.formatters import HtmlFormatter\n"
-								+ "\nresult = highlight(code, " + lang + "Lexer(), HtmlFormatter())");
+							interpreter.exec("from pygments import highlight\n"
+									+ "from pygments.lexers import " + lang + "Lexer\n"
+									+ "from pygments.formatters import HtmlFormatter\n"
+									+ "\nresult = highlight(code, " + lang + "Lexer(), HtmlFormatter())");
 
-						String ret = interpreter.get("result", String.class); 
-						if (ret != null) {
-							printer.print(ret);
-						} else {
-							super.visit(node);
+							String ret = interpreter.get("result", String.class); 
+							if (ret != null) {
+								printer.print(ret);
+							} else {
+								super.visit(node);
+							}
 						}
 					}
 				} else {
