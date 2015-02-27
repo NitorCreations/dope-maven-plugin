@@ -498,7 +498,7 @@ public class DopeMojo extends AbstractMojo {
 		try (FileOutputStream outStream = new FileOutputStream(target); 
 				InputStream inStream = 
 						DopeMojo.class.getClassLoader().getResourceAsStream(name)) {
-			service.submit(new StreamPumper(inStream, outStream)).get();
+			cached.submit(new StreamPumper(inStream, outStream)).get();
 			return target;
 		}
 	}
