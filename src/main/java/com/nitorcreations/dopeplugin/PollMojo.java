@@ -13,7 +13,6 @@ import java.nio.file.WatchService;
 import static java.nio.file.StandardWatchEventKinds.*;
 import static java.nio.file.StandardCopyOption.*;
 
-import org.apache.commons.io.FileUtils;
 import org.apache.maven.plugin.MojoExecutionException;
 import org.apache.maven.plugins.annotations.Mojo;
 import org.apache.maven.plugins.annotations.Parameter;
@@ -25,19 +24,17 @@ public class PollMojo extends DopeMojo {
 	
 	public void execute() throws MojoExecutionException {
 		super.execute();
-		Path htmlPath = htmlDirectory.toPath();
 		Path markdownPath = markdownDirectory.toPath();
 		Path htmlSources = new File(resourcesDirectory, "html").toPath();
 		Path markdownSources = new File(resourcesDirectory, "markdown").toPath();
 		
-		WatchKey markdownKey = null;
 		WatchKey htmlSrcKey = null;
 		WatchKey markdownSrcKey = null;
 		
 		WatchService watcher = null;
 		try {
 			watcher = FileSystems.getDefault().newWatchService();
-			markdownKey = markdownPath.register(watcher, ENTRY_CREATE,
+			markdownPath.register(watcher, ENTRY_CREATE,
 					ENTRY_DELETE,
 					ENTRY_MODIFY);
 			htmlSrcKey = htmlSources.register(watcher, ENTRY_CREATE,
