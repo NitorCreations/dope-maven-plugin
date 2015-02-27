@@ -3,12 +3,14 @@ package com.nitorcreations.dopeplugin;
 import java.awt.image.BufferedImage;
 import java.io.BufferedReader;
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.FileWriter;
 import java.io.FilenameFilter;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.io.OutputStream;
 import java.io.StringWriter;
 import java.nio.charset.Charset;
 import java.nio.file.Files;
@@ -18,24 +20,29 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Properties;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.zip.GZIPInputStream;
 
 import javax.imageio.ImageIO;
 
-import org.apache.commons.io.IOUtils;
 import org.apache.commons.lang.WordUtils;
+import org.apache.maven.artifact.ArtifactUtils;
+import org.apache.maven.artifact.repository.ArtifactRepository;
 import org.apache.maven.plugin.AbstractMojo;
 import org.apache.maven.plugin.MojoExecutionException;
+import org.apache.maven.plugins.annotations.Component;
 import org.apache.maven.plugins.annotations.LifecyclePhase;
 import org.apache.maven.plugins.annotations.Mojo;
 import org.apache.maven.plugins.annotations.Parameter;
@@ -45,6 +52,15 @@ import org.apache.pdfbox.util.PDFMergerUtility;
 import org.apache.velocity.Template;
 import org.apache.velocity.VelocityContext;
 import org.apache.velocity.app.VelocityEngine;
+import org.eclipse.aether.RepositorySystem;
+import org.eclipse.aether.RepositorySystemSession;
+import org.eclipse.aether.artifact.DefaultArtifact;
+import org.eclipse.aether.graph.Dependency;
+import org.eclipse.aether.repository.LocalRepository;
+import org.eclipse.aether.repository.RemoteRepository;
+import org.eclipse.aether.resolution.ArtifactRequest;
+import org.eclipse.aether.resolution.ArtifactResolutionException;
+import org.eclipse.aether.resolution.ArtifactResult;
 import org.imgscalr.Scalr;
 import org.pegdown.Extensions;
 import org.pegdown.LinkRenderer;
@@ -53,10 +69,6 @@ import org.pegdown.ToHtmlSerializer;
 import org.pegdown.ast.RootNode;
 import org.pegdown.ast.VerbatimNode;
 import org.python.util.PythonInterpreter;
-
-import com.github.jarlakxen.embedphantomjs.ExecutionTimeout;
-import com.github.jarlakxen.embedphantomjs.PhantomJSReference;
-import com.github.jarlakxen.embedphantomjs.executor.PhantomJSFileExecutor;
 
 @Mojo( name = "render", defaultPhase = LifecyclePhase.COMPILE )
 public class DopeMojo extends AbstractMojo {
@@ -92,27 +104,39 @@ public class DopeMojo extends AbstractMojo {
 
 	@Parameter( defaultValue = "UTF-8", property = "charset" )
 	protected String charset;
-
-	@Parameter( defaultValue = "embedded", property = "phantomjs" )
-	protected String phantomjs;
 	
 	@Parameter( defaultValue = "false", property = "pdfonly" )
 	protected boolean pdfonly;
-	
-	protected static File checkScript;
+
+	@Parameter( defaultValue = "false", property = "installedPhantomjs" )
+	protected boolean installedPhantomjs;
+
+	@Component
+	private RepositorySystem system;
+
+	@Parameter (required=true, readonly=true, defaultValue = "${project.remoteProjectRepositories}")
+	private List<RemoteRepository> remotes;
+
+	@Parameter (required=true, readonly=true, defaultValue = "${repositorySystemSession}")
+	private RepositorySystemSession session;
+
+    protected static File checkScript;
 	protected static File renderScript;
 	protected static File printScript;
 	protected static File videoPositionScript;
+	
+	protected String phantomjs;
 
-	ExecutorService service = new ThreadPoolExecutor(Runtime.getRuntime().availableProcessors(), 
+	static ExecutorService service = new ThreadPoolExecutor(Runtime.getRuntime().availableProcessors(), 
 			Runtime.getRuntime().availableProcessors() * 4, 10, TimeUnit.SECONDS, new LinkedBlockingQueue<Runnable>(100));
+	static ExecutorService cached = Executors.newCachedThreadPool();
 	static {
 		try {
 			checkScript = extractFile("check.js", ".js");
 			renderScript = extractFile("render.js", ".js");
 			printScript = extractFile("print.js", ".js");
 			videoPositionScript = extractFile("videoposition.js", ".js");
-		} catch (IOException e) {
+		} catch (IOException | InterruptedException | ExecutionException e) {
 			throw new RuntimeException("Failed to create temporary resource", e);
 		}
 	}
@@ -160,10 +184,10 @@ public class DopeMojo extends AbstractMojo {
 					MergeHtml m = new MergeHtml(nextHtml, slideName, htmlFinal);
 					m.merge();
 					if (!pdfonly) {
-						children.add(service.submit(new RenderPngPdfTask(htmlFinal, "png", phantomjs)));
+						children.add(service.submit(new RenderPngPdfTask(htmlFinal, "png")));
 						children.add(service.submit(new VideoPositionTask(htmlFinal)));
 					}
-					children.add(service.submit(new RenderPngPdfTask(htmlFinal, "pdf", phantomjs)));
+					children.add(service.submit(new RenderPngPdfTask(htmlFinal, "pdf")));
 				} else {
 					RootNode astRoot = processor.parseMarkdown(markdown.toCharArray());
 					String nextHtml = new PygmentsToHtmlSerializer().toHtml(astRoot);
@@ -220,15 +244,13 @@ public class DopeMojo extends AbstractMojo {
 		private final File smallSlides;
 		private final File nextSource;
 		private final String format;
-		private final String phantomjs;
 		protected File script;
 
-		private RenderPngPdfTask(File nextSource, String format, String phantomjs) {
+		private RenderPngPdfTask(File nextSource, String format) {
 			this.slides = slidesDirectory;
 			this.smallSlides = smallSlidesDirectory;
 			this.nextSource = nextSource;
 			this.format = format;
-			this.phantomjs = phantomjs;
 			this.script = renderScript;
 		}
 
@@ -247,19 +269,10 @@ public class DopeMojo extends AbstractMojo {
 				return null;
 			}
 			String output="";
-			if ("embedded".equals(phantomjs)) {
-				PhantomJSFileExecutor ex = new PhantomJSFileExecutor(PhantomJSReference.create().build(), new ExecutionTimeout(300, TimeUnit.SECONDS));
-				try {
-					output = ex.execute(script, nextSource.getAbsolutePath(), nextPngPdf.getAbsolutePath()).get();
-				} catch (InterruptedException | ExecutionException e) {
-					return e;
-				}
-			} else {
-				try {
-					output = new NativePhantomjs().exec(phantomjs, script, nextSource, nextPngPdf);
-				} catch (IOException | InterruptedException e) {
-					return e;
-				}
+			try {
+				output = execPhantomjs(script, nextSource, nextPngPdf);
+			} catch (IOException | InterruptedException | ExecutionException e) {
+				return e;
 			}
 			if (output.length() == 0) {
 				nextPngPdf.renameTo(finalPngPdf);
@@ -292,8 +305,8 @@ public class DopeMojo extends AbstractMojo {
 	}
 
 	public class PrintTask extends RenderPngPdfTask {
-		public PrintTask(File nextSource, String phantomjs) {
-			super(nextSource, "pdf", phantomjs);
+		public PrintTask(File nextSource) {
+			super(nextSource, "pdf");
 			this.script = printScript;
 		}
 	}
@@ -320,19 +333,10 @@ public class DopeMojo extends AbstractMojo {
 				return null;
 			}
 			String output;
-			if ("embedded".equals(phantomjs)) {
-				PhantomJSFileExecutor ex = new PhantomJSFileExecutor(PhantomJSReference.create().build(), new ExecutionTimeout(300, TimeUnit.SECONDS));
-				try {
-					output = ex.execute(renderScript, nextSource.getAbsolutePath()).get();
-				} catch (InterruptedException | ExecutionException e) {
-					return e;
-				}
-			} else {
-				try {
-					output = new NativePhantomjs().exec(phantomjs, videoPositionScript, nextSource);
-				} catch (IOException | InterruptedException e) {
-					return e;
-				}
+			try {
+				output = execPhantomjs(videoPositionScript, nextSource);
+			} catch (IOException | InterruptedException | ExecutionException e) {
+				return e;
 			}
 			if (output.length() > 0) {
 				try (FileOutputStream out = new FileOutputStream(nextVideo);
@@ -480,10 +484,10 @@ public class DopeMojo extends AbstractMojo {
 			Throwable superRes = super.call();
 			if (superRes == null) {
 				if (!pdfonly) {
-					children.add(service.submit(new RenderPngPdfTask(titleTemplate, "png", phantomjs)));
+					children.add(service.submit(new RenderPngPdfTask(titleTemplate, "png")));
 					children.add(service.submit(new VideoPositionTask(titleTemplate)));
 				}
-				children.add(service.submit(new RenderPngPdfTask(titleTemplate, "pdf", phantomjs)));
+				children.add(service.submit(new RenderPngPdfTask(titleTemplate, "pdf")));
 				return null;
 			} else {
 				return superRes;
@@ -491,13 +495,13 @@ public class DopeMojo extends AbstractMojo {
 		}
 	}
 
-	private static File extractFile(String name, String suffix) throws IOException {
+	private static File extractFile(String name, String suffix) throws IOException, InterruptedException, ExecutionException {
 		File target = File.createTempFile(name.substring(0, name.length() - suffix.length()), suffix);
 		target.deleteOnExit();
 		try (FileOutputStream outStream = new FileOutputStream(target); 
 				InputStream inStream = 
 						DopeMojo.class.getClassLoader().getResourceAsStream(name)) {
-			IOUtils.copy(inStream, outStream);
+			service.submit(new StreamPumper(inStream, outStream)).get();
 			return target;
 		}
 	}
@@ -506,7 +510,18 @@ public class DopeMojo extends AbstractMojo {
 		File f = markdownDirectory;
 		htmlTemplate = new File(htmlDirectory, "slidetemplate.html");
 		titleTemplate = new File(htmlDirectory, "title.html");
-		
+		if (installedPhantomjs) {
+			phantomjs = "phantomjs";
+			if (System.getProperty("os.name").toLowerCase().contains("win")) {
+				phantomjs = "phantomjs.exe";
+			}
+		} else {
+			try {
+				phantomjs = resolvePhantomJs();
+			} catch (IOException | InterruptedException | ExecutionException e) {
+				throw new MojoExecutionException("Failed to resolve phantomjs binary", e);
+			}
+		}
 		getLog().debug(String.format("Markdown from %s", f.getAbsolutePath()));
 		if ( !f.exists() ) {
 			return;
@@ -522,11 +537,7 @@ public class DopeMojo extends AbstractMojo {
 				return name.endsWith(".md") || name.endsWith(".md.notes");
 			}
 		});
-		if ("embedded".equals(phantomjs)) {
-			getLog().info("Ensuring phantomjs");
-			PhantomJSFileExecutor ex = new PhantomJSFileExecutor(PhantomJSReference.create().build(), new ExecutionTimeout(300, TimeUnit.SECONDS));
-			ex.execute(checkScript);
-		}
+
 		getLog().info(String.format("Processing %d markdown files", sources.length));
 		final Map<String, String> notes = new ConcurrentHashMap<>();
 		final Map<String, String> htmls = new ConcurrentHashMap<>();
@@ -621,7 +632,7 @@ public class DopeMojo extends AbstractMojo {
 				getLog().error(e);
 			}
 		}
-		Throwable err = new PrintTask(new File(htmlDirectory, "index-notes.html"), phantomjs).call();
+		Throwable err = new PrintTask(new File(htmlDirectory, "index-notes.html")).call();
 		if (err != null) {
 			getLog().error("Creating presenter notes pdf failed", err);
 		}
@@ -640,7 +651,6 @@ public class DopeMojo extends AbstractMojo {
 		} catch (COSVisitorException | IOException e) {
 			throw new MojoExecutionException("Failed to merge pdf", e);
 		}
-
 	}
 
 	private static void ensureDir(File dir) throws MojoExecutionException {
@@ -653,14 +663,12 @@ public class DopeMojo extends AbstractMojo {
 	}
 
 	private class PygmentsToHtmlSerializer extends ToHtmlSerializer {
-
 		public PygmentsToHtmlSerializer() {
 			this(new LinkRenderer());
 		}
 		public PygmentsToHtmlSerializer(LinkRenderer linkRenderer) {
 			super(linkRenderer);
 		}
-		
 		@Override
 		public void visit(VerbatimNode node) {
 			try {
@@ -691,21 +699,59 @@ public class DopeMojo extends AbstractMojo {
 			}
 		}
 	}
-	
-	private static class NativePhantomjs {
-		public String exec(String phantomjs, File renderScript, File nextSource, File nextPngPdf) throws IOException, InterruptedException {
-			ProcessBuilder b = new ProcessBuilder(phantomjs, renderScript.getAbsolutePath(), nextSource.getAbsolutePath(), nextPngPdf.getAbsolutePath());
-			b.environment().putAll(System.getenv());
-			Process p = b.start();
-			p.waitFor();
-			return IOUtils.toString(p.getInputStream());
+	public String execPhantomjs(File renderScript, File nextSource, File nextPngPdf) throws IOException, InterruptedException, ExecutionException {
+		ProcessBuilder b = new ProcessBuilder(phantomjs, renderScript.getAbsolutePath(), nextSource.getAbsolutePath(), nextPngPdf.getAbsolutePath());
+		b.environment().putAll(System.getenv());
+		Process p = b.start();
+		p.waitFor();
+		return cached.submit(new StreamToString(p.getInputStream())).get();
+	}
+	public String execPhantomjs(File renderScript, File nextSource) throws IOException, InterruptedException, ExecutionException {
+		ProcessBuilder b = new ProcessBuilder(phantomjs, renderScript.getAbsolutePath(), nextSource.getAbsolutePath());
+		b.environment().putAll(System.getenv());
+		Process p = b.start();
+		p.waitFor();
+		return cached.submit(new StreamToString(p.getInputStream())).get();
+	}
+	private String resolvePhantomJs() throws IOException, InterruptedException, ExecutionException {
+		Properties ver = new Properties();
+		ver.load(this.getClass().getClassLoader().getResourceAsStream("dope.properties"));
+		String artifactId = "com.nitorcreations:dope-maven-plugin:gz:";
+		
+		String os = System.getProperty("os.name").toLowerCase();
+		String binaryFile = "phantomjs";
+		if (os.contains("win")) {
+			artifactId += "win:";
+			binaryFile = "phantomjs.exe";
+		} else if (os.contains("os x")) {
+			artifactId += "osx:";
+		} else {
+			if (System.getProperty("os.arch").contains("64")) {
+				artifactId += "lin64:";
+			} else {
+				artifactId += "lin32:";
+			}
 		}
-		public String exec(String phantomjs, File renderScript, File nextSource) throws IOException, InterruptedException {
-			ProcessBuilder b = new ProcessBuilder(phantomjs, renderScript.getAbsolutePath(), nextSource.getAbsolutePath());
-			b.environment().putAll(System.getenv());
-			Process p = b.start();
-			p.waitFor();
-			return IOUtils.toString(p.getInputStream());
-		}
+		artifactId += ver.getProperty("dope.version");
+	    Dependency dependency = new Dependency(new DefaultArtifact(artifactId), "runtime");
+	    ArtifactRequest req = new ArtifactRequest();
+	    req.setArtifact(dependency.getArtifact());
+	    for (RemoteRepository remote : remotes) {
+	    	req.addRepository(remote);
+	    }
+	    File binary = null;
+	    try {
+	      ArtifactResult result = system.resolveArtifact(session, req);
+	      binary = result.getArtifact().getFile();
+	    } catch (ArtifactResolutionException e) {
+	      throw new RuntimeException("Failed to resolve " + artifactId, e);
+	    }
+    	File finalFile = new File(binary.getAbsoluteFile().getParentFile(), binaryFile);
+	    try (GZIPInputStream in = new GZIPInputStream(new FileInputStream(binary)); 
+	    		OutputStream out = new FileOutputStream(finalFile)) {
+	    	cached.submit(new StreamPumper(in, out)).get();
+	    }
+	    finalFile.setExecutable(true);
+	    return finalFile.getAbsolutePath();
 	}
 }
