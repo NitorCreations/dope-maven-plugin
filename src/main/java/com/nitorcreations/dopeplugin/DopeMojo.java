@@ -45,8 +45,8 @@ import org.apache.maven.plugins.annotations.LifecyclePhase;
 import org.apache.maven.plugins.annotations.Mojo;
 import org.apache.maven.plugins.annotations.Parameter;
 import org.apache.maven.project.MavenProject;
-import org.apache.pdfbox.exceptions.COSVisitorException;
-import org.apache.pdfbox.util.PDFMergerUtility;
+import org.apache.pdfbox.io.MemoryUsageSetting;
+import org.apache.pdfbox.multipdf.PDFMergerUtility;
 import org.apache.velocity.Template;
 import org.apache.velocity.VelocityContext;
 import org.apache.velocity.app.VelocityEngine;
@@ -636,16 +636,17 @@ public class DopeMojo extends AbstractMojo {
 		new File(buildDirectory, "index-notes.pdf").renameTo(new File(htmlDirectory, "presentation-notes.pdf"));
 		getLog().debug("Merging pdfs");
 		PDFMergerUtility merger = new PDFMergerUtility();
-		for( String sourceFileName : slideNames ) {
-			File source = new File(buildDirectory, sourceFileName + ".pdf");
-			getLog().debug("Merging pdf: " + source.getAbsolutePath());
-			merger.addSource(source.getAbsolutePath());
-		}
-		String destinationFileName = new File(htmlDirectory, "presentation.pdf").getAbsolutePath();
-		merger.setDestinationFileName(destinationFileName);
 		try {
-			merger.mergeDocuments();
-		} catch (COSVisitorException | IOException e) {
+			for( String sourceFileName : slideNames ) {
+				File source = new File(buildDirectory, sourceFileName + ".pdf");
+				getLog().debug("Merging pdf: " + source.getAbsolutePath());
+				merger.addSource(source.getAbsolutePath());
+			}
+			String destinationFileName = new File(htmlDirectory, "presentation.pdf").getAbsolutePath();
+			merger.setDestinationFileName(destinationFileName);
+			MemoryUsageSetting setupMainMemoryOnly = MemoryUsageSetting.setupMainMemoryOnly();
+			merger.mergeDocuments(setupMainMemoryOnly);
+		} catch (IOException e) {
 			throw new MojoExecutionException("Failed to merge pdf", e);
 		}
 	}
